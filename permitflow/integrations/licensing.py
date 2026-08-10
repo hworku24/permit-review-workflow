@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
+from typing import Protocol
 from uuid import UUID
 
 import psycopg
@@ -75,6 +76,10 @@ def _classify(exc: Exception) -> str:
 
 
 class LicensingClient:
+    #: Identifies which backend answered, so the integration log says how the licence was
+    #: reached and not only what it said.
+    name = "direct"
+
     def __init__(
         self,
         dsn: str | None = None,
@@ -145,6 +150,30 @@ class LicensingClient:
                 expires_on=row["expires_on"],
                 disciplinary_action_count=row["disciplinary_action_count"] or 0,
             ),
+        )
+
+    def verification(
+        self,
+        license_number: str,
+        as_of: date | None = None,
+        application_id: UUID | None = None,
+    ) -> Verification:
+        """The `LicensingBackend` view of a lookup: the answer plus what intake does about it.
+
+        `verify` reports what the replica said and whether it could be reached.
+        `intake_effect` decides what that means for the application. Keeping the two apart
+        is what lets the effect rules be tested without a database.
+        """
+        outcome = self.verify(license_number, application_id=application_id)
+        status, effect, message = intake_effect(outcome, as_of=as_of)
+        return Verification(
+            license_number=license_number,
+            verified=outcome.verified,
+            status=status,
+            effect=effect,
+            message=message,
+            business_name=outcome.value.business_name if outcome.value else None,
+            expires_on=outcome.value.expires_on if outcome.value else None,
         )
 
 
@@ -252,17 +281,27 @@ class Verification:
 class LicensingBackend(Protocol):
     """How the department reaches the state's licensing data.
 
-    Two implementations exist for a reason that is worth stating plainly. In deployment the
-    state grants access through a JDBC datasource, so a small Java service owns that
-    connection and this application calls it over HTTP. The direct connection is the local
-    and development path against the replica stand-in, and it is also the reference the
-    Java rules are checked against: `tests/test_licensing_parity.py` drives both backends
-    over the same data and fails if they ever disagree.
+    The seam exists because the same verification is implemented twice against the same
+    replica schema. `LicensingClient` below connects directly and is the path this
+    application takes today. `licensing-verifier/` is a Spring service holding the same
+    rules over a JDBC datasource, which is the shape the state actually grants access in.
+
+    Only the direct backend is wired in. An HTTP backend calling the Java service, and a
+    parity test driving both over the same data, are the next piece of work here.
     """
 
     name: str
 
     def verification(self, license_number: str, as_of: date | None = None, application_id: UUID | None = None) -> Verification: ...
+
+
+def get_licensing_backend() -> LicensingBackend:
+    """The backend intake uses when a caller does not pass one.
+
+    A function rather than a module-level instance, so settings are read at call time and
+    a test can substitute a backend without touching import order.
+    """
+    return LicensingClient()
 
 
 def verify_and_record(
