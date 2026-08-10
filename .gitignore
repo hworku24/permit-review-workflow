@@ -1,0 +1,23 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+# Maven (licensing-verifier)
+target/
+.mvn/wrapper/maven-wrapper.jar
+
+# Editors
+.idea/
+.vscode/
+*.iml

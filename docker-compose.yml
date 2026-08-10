@@ -1,0 +1,52 @@
+services:
+  # PermitFlow's own database.
+  permitflow-db:
+    image: postgres:16
+    container_name: permitflow-db
+    environment:
+      POSTGRES_DB: permitflow
+      POSTGRES_USER: permitflow
+      POSTGRES_PASSWORD: permitflow
+      # Business day math casts timestamps to dates, so the container clock has to match
+      # the department's local calendar. See the header of sql/001_schema.sql.
+      TZ: America/New_York
+      PGTZ: America/New_York
+    ports:
+      - "5433:5432"
+    volumes:
+      - permitflow_data:/var/lib/postgresql/data
+      - ./sql/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - ./sql/002_views.sql:/docker-entrypoint-initdb.d/002_views.sql:ro
+      - ./sql/003_seed.sql:/docker-entrypoint-initdb.d/003_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U permitflow -d permitflow"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # The state licensing replica. A separate server on a separate port, because that is
+  # what it is in reality and because sharing one server would hide the fact that this is
+  # a second connection with its own credentials and its own failure mode.
+  licensing-db:
+    image: postgres:16
+    container_name: permitflow-licensing-db
+    environment:
+      POSTGRES_DB: licensing_replica
+      POSTGRES_USER: dpor_admin
+      POSTGRES_PASSWORD: dpor_admin
+      TZ: America/New_York
+      PGTZ: America/New_York
+    ports:
+      - "5434:5432"
+    volumes:
+      - licensing_data:/var/lib/postgresql/data
+      - ./sql/legacy/001_licensing.sql:/docker-entrypoint-initdb.d/001_licensing.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dpor_admin -d licensing_replica"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  permitflow_data:
+  licensing_data:

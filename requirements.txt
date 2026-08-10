@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+psycopg[binary,pool]==3.2.3
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-dotenv==1.0.1
+# SOAP client for the county property records service. The mock service on the other end
+# is served from FastAPI with hand-built envelopes rather than a SOAP server framework,
+# because spyne does not import on Python 3.12.
+zeep==4.3.1
+lxml==5.3.0
+httpx==0.28.1

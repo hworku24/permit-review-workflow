@@ -1,0 +1,25 @@
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    # Long lines are allowed in SQL string literals and in the explanatory comments that
+    # carry most of the reasoning in this codebase. E501 would push both into shapes that
+    # read worse.
+    "E501",
+    # Nested `with` blocks are the clearest way to write "connection, then cursor".
+    "SIM117",
+    # `isinstance(exc, (A, B))` reads better than the union form in the integration
+    # classifiers, where the tuple is a list of failure types rather than a type union.
+    "UP038",
+]
+
+[lint.per-file-ignores]
+# `Depends(...)` in a parameter default is the FastAPI idiom, not a mutable-default bug.
+"permitflow/api/routes/*" = ["B008"]
+# Tests assert on magic values by design, and fixtures shadow builtins-adjacent names.
+"tests/*" = ["B011"]
+
+[format]
+quote-style = "double"
