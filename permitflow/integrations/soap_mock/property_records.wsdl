@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Rivermont County Assessor, Property Records Service.
+
+  This is the contract as published by the county. PermitFlow does not own it and cannot
+  change it. It is reproduced here so the system runs end to end without the county being
+  reachable. See docs/04-integration-spec.md section I1.
+-->
+<wsdl:definitions
+    name="PropertyRecords"
+    targetNamespace="http://records.rivermontcounty.gov/propertyrecords"
+    xmlns:tns="http://records.rivermontcounty.gov/propertyrecords"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+    xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/">
+
+  <wsdl:types>
+    <xsd:schema targetNamespace="http://records.rivermontcounty.gov/propertyrecords"
+                elementFormDefault="qualified">
+
+      <xsd:element name="GetParcelByAPNRequest">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="APN" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="GetParcelByAPNResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="APN"              type="xsd:string"/>
+            <xsd:element name="SitusAddress"     type="xsd:string"/>
+            <xsd:element name="ZoningCode"       type="xsd:string"/>
+            <xsd:element name="OwnerName"        type="xsd:string" minOccurs="0"/>
+            <xsd:element name="Acreage"          type="xsd:decimal" minOccurs="0"/>
+            <xsd:element name="StopWorkOrder"    type="xsd:boolean"/>
+            <xsd:element name="LastAssessedDate" type="xsd:date" minOccurs="0"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="ParcelNotFoundFault">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="Message" type="xsd:string"/>
+            <xsd:element name="APN"     type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="ServiceUnavailableFault">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="Message" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+    </xsd:schema>
+  </wsdl:types>
+
+  <wsdl:message name="GetParcelByAPNInput">
+    <wsdl:part name="parameters" element="tns:GetParcelByAPNRequest"/>
+  </wsdl:message>
+  <wsdl:message name="GetParcelByAPNOutput">
+    <wsdl:part name="parameters" element="tns:GetParcelByAPNResponse"/>
+  </wsdl:message>
+  <wsdl:message name="ParcelNotFound">
+    <wsdl:part name="fault" element="tns:ParcelNotFoundFault"/>
+  </wsdl:message>
+  <wsdl:message name="ServiceUnavailable">
+    <wsdl:part name="fault" element="tns:ServiceUnavailableFault"/>
+  </wsdl:message>
+
+  <wsdl:portType name="PropertyRecordsPortType">
+    <wsdl:operation name="GetParcelByAPN">
+      <wsdl:input  message="tns:GetParcelByAPNInput"/>
+      <wsdl:output message="tns:GetParcelByAPNOutput"/>
+      <wsdl:fault name="ParcelNotFound"     message="tns:ParcelNotFound"/>
+      <wsdl:fault name="ServiceUnavailable" message="tns:ServiceUnavailable"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <wsdl:binding name="PropertyRecordsBinding" type="tns:PropertyRecordsPortType">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="GetParcelByAPN">
+      <soap:operation soapAction="http://records.rivermontcounty.gov/propertyrecords/GetParcelByAPN"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+      <wsdl:fault name="ParcelNotFound">
+        <soap:fault name="ParcelNotFound" use="literal"/>
+      </wsdl:fault>
+      <wsdl:fault name="ServiceUnavailable">
+        <soap:fault name="ServiceUnavailable" use="literal"/>
+      </wsdl:fault>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <wsdl:service name="PropertyRecords">
+    <wsdl:port name="PropertyRecordsPort" binding="tns:PropertyRecordsBinding">
+      <soap:address location="http://localhost:8081/property-records"/>
+    </wsdl:port>
+  </wsdl:service>
+
+</wsdl:definitions>
