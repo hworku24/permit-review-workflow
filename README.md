@@ -87,6 +87,16 @@ PYTHONPATH=. .venv/bin/python -m pytest
 business day functions, the append-only audit triggers, the partial unique indexes, and the
 reporting views are all things a substitute would let me get wrong.
 
+The Java service has its own suite, run from `licensing-verifier/`:
+
+```bash
+./mvnw -B test
+```
+
+Its repository test also runs against the licensing replica from docker-compose, for the
+same reason: `char(12)` padding and an unconstrained status column are the behaviour under
+test, and an embedded database has neither. CI runs both suites.
+
 ## How it fits together
 
 ```

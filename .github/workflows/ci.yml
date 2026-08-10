@@ -100,3 +100,54 @@ jobs:
           assert len(index) > 20, f'only {len(index)} sections parsed'
           print(f'{len(index)} ordinance sections parsed')
           "
+
+  licensing-verifier:
+    name: Licensing verifier (Java, JDBC)
+    runs-on: ubuntu-latest
+
+    services:
+      # Only the licensing replica. This service never touches PermitFlow's own database,
+      # and giving it one in CI would hide that.
+      licensing-db:
+        image: postgres:16
+        env:
+          POSTGRES_DB: licensing_replica
+          POSTGRES_USER: dpor_admin
+          POSTGRES_PASSWORD: dpor_admin
+          TZ: America/New_York
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U dpor_admin -d licensing_replica"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Apply the legacy licensing schema
+        run: |
+          PGPASSWORD=dpor_admin psql -v ON_ERROR_STOP=1 -h localhost -p 5434 \
+            -U dpor_admin -d licensing_replica -f sql/legacy/001_licensing.sql
+
+      - name: Test
+        # ContractorLicenseRepositoryTest runs against the replica rather than an embedded
+        # database, because char(12) padding and an unconstrained status column are the
+        # behaviour under test and an in-memory substitute has neither.
+        working-directory: licensing-verifier
+        run: ./mvnw -B test
+
+  compose:
+    name: Compose file is valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate
+        run: docker compose config --quiet
