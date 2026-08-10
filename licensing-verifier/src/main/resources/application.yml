@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: licensing-verifier
+
+  datasource:
+    # The state's replica. Defaults point at the local stand-in from docker-compose so a
+    # fresh clone runs with no real credentials.
+    url: ${LICENSING_DB_JDBC_URL:jdbc:postgresql://localhost:5434/licensing_replica}
+    username: ${LICENSING_DB_USER:permitflow_ro}
+    password: ${LICENSING_DB_PASSWORD:readonly}
+    driver-class-name: org.postgresql.Driver
+
+    hikari:
+      pool-name: licensing-replica
+      # Small on purpose. This pool holds connections open against a database another
+      # government operates, and a jurisdiction that opens twenty of them is a jurisdiction
+      # that gets its account throttled.
+      maximum-pool-size: ${LICENSING_DB_POOL_SIZE:5}
+      minimum-idle: 1
+      # Fail fast rather than queueing intake requests behind an unreachable replica.
+      connection-timeout: 10000
+      validation-timeout: 5000
+      idle-timeout: 300000
+      max-lifetime: 900000
+      # Belt and braces alongside the grant on the state's side. The account we are issued
+      # only has SELECT; this makes a stray write fail here rather than travel.
+      read-only: true
+
+  jdbc:
+    template:
+      # A query that has not answered in ten seconds is not going to.
+      query-timeout: 10s
+
+server:
+  port: ${LICENSING_VERIFIER_PORT:8082}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    gov.rivermont.permits.licensing: INFO
