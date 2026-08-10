@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+
+    services:
+      # PermitFlow's own database.
+      permitflow-db:
+        image: postgres:16
+        env:
+          POSTGRES_DB: permitflow
+          POSTGRES_USER: permitflow
+          POSTGRES_PASSWORD: permitflow
+          TZ: America/New_York
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U permitflow -d permitflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      # The state licensing replica. A separate server, as in the real deployment.
+      licensing-db:
+        image: postgres:16
+        env:
+          POSTGRES_DB: licensing_replica
+          POSTGRES_USER: dpor_admin
+          POSTGRES_PASSWORD: dpor_admin
+          TZ: America/New_York
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U dpor_admin -d licensing_replica"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PERMITFLOW_DB_URL: postgresql://permitflow:permitflow@localhost:5433/permitflow
+      LICENSING_DB_URL: postgresql://permitflow_ro:readonly@localhost:5434/licensing_replica
+      # NFR-06: the suite runs with no model credentials. The offline provider is
+      # deterministic, so the AI tests assert on behaviour rather than on a live model.
+      AI_PROVIDER: offline
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Set database timezone
+        # Business day arithmetic casts timestamptz to date, so the server's zone has to
+        # be the department's local calendar. docker-compose does this with TZ; the
+        # service container's initdb has already run by the time TZ applies, so it is set
+        # explicitly here.
+        run: |
+          PGPASSWORD=permitflow psql -h localhost -p 5433 -U permitflow -d postgres \
+            -c "ALTER DATABASE permitflow SET timezone = 'America/New_York';"
+
+      - name: Apply schema, views, and reference data
+        run: |
+          export PGPASSWORD=permitflow
+          for file in sql/001_schema.sql sql/002_views.sql sql/003_seed.sql; do
+            psql -v ON_ERROR_STOP=1 -h localhost -p 5433 -U permitflow -d permitflow -f "$file"
+          done
+
+      - name: Apply the legacy licensing schema
+        run: |
+          PGPASSWORD=dpor_admin psql -v ON_ERROR_STOP=1 -h localhost -p 5434 \
+            -U dpor_admin -d licensing_replica -f sql/legacy/001_licensing.sql
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest --cov=permitflow --cov-report=term-missing
+
+      - name: Verify the ordinance corpus loads
+        # Cheap guard against a corpus edit that breaks section parsing, which would make
+        # every retrieval test fail for a reason unrelated to retrieval.
+        run: |
+          python -c "
+          from permitflow.ai.retrieval import load_index
+          index = load_index()
+          assert len(index) > 20, f'only {len(index)} sections parsed'
+          print(f'{len(index)} ordinance sections parsed')
+          "
