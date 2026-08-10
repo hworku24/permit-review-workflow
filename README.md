@@ -10,6 +10,12 @@ The client is the City of Rivermont, which does not exist. The zoning provisions
 thresholds, and review timelines are modeled on patterns common to mid-size US
 municipalities. The engineering problems are real.
 
+Two things worth stating plainly. The repository was initialized after the code was
+written, so the commits are sequenced to follow the build order in
+[docs/05-user-stories.md](docs/05-user-stories.md) rather than a real calendar. And no
+part of this has ever run in a municipal department. Every number in this README comes
+from the seeded case generator described below.
+
 ## Why this exists
 
 Most of the code I write moves data from one shape to another. This is a different problem.
