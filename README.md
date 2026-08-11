@@ -66,13 +66,28 @@ PYTHONPATH=.:scripts .venv/bin/python scripts/seed_demo.py
 
 It clears any existing case data, generates a year of history, and adds five cases parked
 in the states worth looking at: one issued with a clean review, one under review with four
-disciplines open, one returned to the applicant with the clock paused, one open since April
-and past its allowance, and one where the licensing replica was unreachable at intake. It
-prints their application numbers at the end.
+disciplines open, one returned to the applicant with the clock paused, one open for four
+months and past its allowance, and one where the licensing replica was unreachable at
+intake. It prints their application numbers at the end.
 
-Every case is driven through the engine with an injected clock rather than written as rows,
-so the history obeys the same guards and writes the same audit trail as live traffic. That
-includes the demo cases: each one is in its state because the rules put it there.
+The history is worked backwards from the run date, so the newest cases are days old and the
+last-30-days columns on the reports have something in them. Pass `--today` to pin the run
+date and get the same database on any machine on any day.
+
+Every case is driven through the engine with an injected clock, not written as rows, so the
+history obeys the same guards and writes the same audit trail as live traffic. That includes
+the demo cases: each one is in its state because the rules put it there.
+
+Then check it before demoing:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/verify_demo.py
+```
+
+Twenty-five checks, each named for the screen it protects, exiting non-zero if any fail.
+The one worth reading is the SLA identity: gross minus applicant wait equals net, asserted
+on every decided case and not on the averages, because an average can hold while individual
+rows are wrong.
 
 For history alone, without the five demo cases:
 
@@ -86,15 +101,15 @@ through. To clear case data without seeding, `scripts/reset_demo.py` does that a
 Reference data is never touched by either.
 
 The seeder prints compliance by month. The aggregate below comes from the reporting views
-after a 60 case run:
+after the default 120 case run:
 
 ```
 decided  compliance  mean_net  median_net  p90_net  mean_gross  mean_wait
-     60       71.7%      18.3          18     28.1        28.2        9.8
+    121       69.4%      19.5          19     28.0        29.7       10.2
 ```
 
 Mean gross minus mean applicant wait equals mean net, which is the arithmetic the whole SLA
-design exists to get right. The 71.7% compliance figure is deliberately in the same range as
+design exists to get right. The 69.4% compliance figure is deliberately in the same range as
 the 61% the fictional department was hitting before, because a demo where everything passes
 does not demonstrate anything.
 
@@ -266,7 +281,7 @@ permitflow/
 sql/                schema, reporting views, reference data, legacy licensing schema
 corpus/             the zoning ordinance the retrieval layer reads
 docs/               requirements through traceability
-scripts/            case history generator, demo builder, reset
+scripts/            case history generator, demo builder, reset, demo verification
 tests/              233 tests against a real database
 ```
 

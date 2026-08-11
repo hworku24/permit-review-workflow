@@ -19,12 +19,13 @@ from __future__ import annotations
 import argparse
 import random
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import UUID
 
 import seed_cases
 
+from permitflow.ai import recording, triage
 from permitflow.config import DEPARTMENT_TZ
 from permitflow.db import get_pool, transaction
 from permitflow.demo import reset_case_data
@@ -37,10 +38,69 @@ from permitflow.process.states import Role
 CLERK = Actor("mcarrero", Role.INTAKE_CLERK)
 SUPERVISOR = Actor("dhollis", Role.SUPERVISOR)
 
-# Far enough in the past that a case left open is comfortably past its SLA at real now,
-# which is what lets the escalation sweep raise a breach without faking a due date.
-STALE_START = "2026-04-06"
-RECENT_START = "2026-07-27"
+#: Business days back from the run date for each demo case. The escalated one is far
+#: enough back that the sweep finds it past its allowance at real now, which is what lets
+#: a breach be raised without writing a due date by hand.
+STALE_DAYS_BACK = 125
+RECENT_DAYS_BACK = 14
+
+#: Left after the generated history so the last case decides shortly before the run date.
+#: Without it the newest history would still be months old and every "last 30 days" column
+#: on the dashboard reads zero, which looks like a broken query and not a quiet month.
+HISTORY_TAIL_DAYS = 25
+
+
+def _at(today: date, days_back: int, *, hour: int) -> datetime:
+    """A department-local timestamp `days_back` calendar days before the run date."""
+    return datetime.combine(today - timedelta(days=days_back), time(hour=hour), DEPARTMENT_TZ)
+
+
+def _run_triage(conn, application_id: UUID, *, decision: str, actor: str = "mcarrero") -> None:
+    """Draft the intake fields and routing, then leave the row in the state asked for.
+
+    Same calls the API route makes. `decision` is "pending", "accepted", or "overridden",
+    so the triage screen has one of each to show. A screen that only ever displays the
+    happy path does not tell a reviewer what an override looks like.
+    """
+    app = Engine(conn).get_application(application_id)
+    narrative = app["scope_narrative"]
+
+    extraction = triage.extract(narrative)
+    routing = triage.recommend_routing(conn, app["permit_type_code"], narrative)
+
+    extraction_id = recording.record(
+        conn,
+        application_id=application_id,
+        kind="field_extraction",
+        payload=extraction.as_payload(),
+        model=extraction.model,
+        prompt_version=extraction.prompt_version,
+        confidence=(
+            round(sum(s.confidence for s in extraction.accepted.values()) / len(extraction.accepted), 3)
+            if extraction.accepted
+            else None
+        ),
+    )
+    recording.record(
+        conn,
+        application_id=application_id,
+        kind="discipline_routing",
+        payload=routing.as_payload(),
+        model=routing.model,
+        prompt_version=routing.prompt_version,
+    )
+
+    if decision == "accepted":
+        recording.decide(conn, extraction_id, actor=actor, accepted=True)
+    elif decision == "overridden":
+        # The clerk keeps the extraction but corrects one field. Recording the corrected
+        # value next to the original is what makes the override reviewable later.
+        corrected = extraction.as_payload()
+        corrected["clerk_correction"] = {
+            "field": "declared_valuation",
+            "reason": "figure on the submitted cost affidavit differs from the narrative",
+        }
+        recording.decide(conn, extraction_id, actor=actor, accepted=False, override_payload=corrected)
 
 
 def _parties(conn, *, slot: int, name: str, business: str, license_number: str) -> dict:
@@ -112,9 +172,9 @@ def _number(conn, application_id: UUID) -> str:
         return cur.fetchone()["application_number"]
 
 
-def golden_path(conn, rng) -> tuple[str, str]:
-    """Submitted, screened, reviewed clean by all four disciplines, issued."""
-    clock = seed_cases.Clock(datetime.fromisoformat(RECENT_START).replace(hour=9, tzinfo=DEPARTMENT_TZ))
+def golden_path(conn, rng, today: date) -> tuple[str, str]:
+    """Submitted, screened, reviewed clean, issued."""
+    clock = seed_cases.Clock(_at(today, RECENT_DAYS_BACK, hour=9))
     parties = _parties(
         conn, slot=1, name="Priya Venkataraman", business="Harlowe Building Group LLC",
         license_number="VA-CL-004182",
@@ -136,6 +196,7 @@ def golden_path(conn, rng) -> tuple[str, str]:
         conn, parties["contractor_id"], "VA-CL-004182", application_id=application_id
     )
 
+    _run_triage(conn, application_id, decision="accepted")
     _receive_documents(conn, application_id, clock, parties["applicant"].username)
     clock.advance_business_days(1, rng)
     engine.accept_intake(application_id, CLERK)
@@ -151,9 +212,9 @@ def golden_path(conn, rng) -> tuple[str, str]:
     return _number(conn, application_id), "issued, clean review, full audit trail"
 
 
-def awaiting_review(conn, rng) -> tuple[str, str]:
+def awaiting_review(conn, rng, today: date) -> tuple[str, str]:
     """Intake accepted, four tasks open, nobody has started one."""
-    clock = seed_cases.Clock(datetime.fromisoformat(RECENT_START).replace(hour=10, tzinfo=DEPARTMENT_TZ))
+    clock = seed_cases.Clock(_at(today, RECENT_DAYS_BACK, hour=10))
     parties = _parties(
         conn, slot=2, name="Marcus Okafor", business="Southgate Commercial Builders",
         license_number="VA-CL-013006",
@@ -176,12 +237,13 @@ def awaiting_review(conn, rng) -> tuple[str, str]:
     # Environmental is confirmed at screening because the narrative mentions stormwater.
     # Four disciplines open at once, which is the point of the queue screen.
     engine.accept_intake(application_id, CLERK, confirmed_additional_disciplines=["ENVIRONMENTAL"])
+    _run_triage(conn, application_id, decision="pending")
     return _number(conn, application_id), "under review, four tasks open, none started"
 
 
-def paused_on_applicant(conn, rng) -> tuple[str, str]:
+def paused_on_applicant(conn, rng, today: date) -> tuple[str, str]:
     """Returned incomplete. Sitting with the applicant and the SLA clock stopped."""
-    clock = seed_cases.Clock(datetime.fromisoformat(RECENT_START).replace(hour=11, tzinfo=DEPARTMENT_TZ))
+    clock = seed_cases.Clock(_at(today, RECENT_DAYS_BACK, hour=11))
     parties = _parties(
         conn, slot=3, name="Dana Whitfield", business="Delmar Renovations Inc",
         license_number="VA-CL-011290",
@@ -204,9 +266,9 @@ def paused_on_applicant(conn, rng) -> tuple[str, str]:
     return _number(conn, application_id), "returned incomplete, clock paused on the applicant"
 
 
-def escalated(conn, rng) -> tuple[str, str]:
-    """Opened in April and never finished, so the sweep finds it past its allowance."""
-    clock = seed_cases.Clock(datetime.fromisoformat(STALE_START).replace(hour=9, tzinfo=DEPARTMENT_TZ))
+def escalated(conn, rng, today: date) -> tuple[str, str]:
+    """Opened months ago and never finished, so the sweep finds it past its allowance."""
+    clock = seed_cases.Clock(_at(today, STALE_DAYS_BACK, hour=9))
     parties = _parties(
         conn, slot=4, name="Glen Sutton-Reyes", business="Foxglove Design Build",
         license_number="VA-CL-025637",
@@ -231,17 +293,17 @@ def escalated(conn, rng) -> tuple[str, str]:
     if tasks:
         actor = seed_cases._reviewer_actor(conn, tasks[0]["id"])
         engine.start_task(tasks[0]["id"], actor)
-    return _number(conn, application_id), "open since April, past its allowance"
+    return _number(conn, application_id), f"open {STALE_DAYS_BACK} days, past its allowance"
 
 
-def unverified_licence(conn, rng) -> tuple[str, str]:
+def unverified_licence(conn, rng, today: date) -> tuple[str, str]:
     """Intake ran while the licensing replica was unreachable.
 
     Driven through the real client against a port nothing is listening on, so the retries,
     the failure classification, and the integration_call rows are all genuine. The licence
     is recorded UNVERIFIED and never ACTIVE, which is the rule worth showing.
     """
-    clock = seed_cases.Clock(datetime.fromisoformat(RECENT_START).replace(hour=14, tzinfo=DEPARTMENT_TZ))
+    clock = seed_cases.Clock(_at(today, RECENT_DAYS_BACK, hour=14))
     parties = _parties(
         conn, slot=5, name="Nadia Malik", business="Pinecrest Construction Co",
         license_number="VA-CL-007733",
@@ -265,6 +327,7 @@ def unverified_licence(conn, rng) -> tuple[str, str]:
         client=dead,
         application_id=application_id,
     )
+    _run_triage(conn, application_id, decision="overridden")
     return _number(conn, application_id), f"licence {status}, intake effect {effect}"
 
 
@@ -273,8 +336,14 @@ SCENARIOS = [golden_path, awaiting_review, paused_on_applicant, escalated, unver
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", type=int, default=60, help="generated history before the demo cases")
+    parser.add_argument("--cases", type=int, default=120, help="generated history before the demo cases")
     parser.add_argument("--seed", type=int, default=20260803)
+    parser.add_argument(
+        "--today",
+        type=date.fromisoformat,
+        default=date.today(),
+        help="run date the history is worked backwards from; pin it to reproduce an exact database",
+    )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -287,20 +356,23 @@ def main() -> None:
     print("Reset: existing case data cleared.")
 
     rng = random.Random(args.seed)
-    start = datetime.fromisoformat("2025-09-01").replace(hour=9, tzinfo=DEPARTMENT_TZ)
+    # Worked backwards from the run date so the newest history is days old and not months.
+    # Two runs on the same day still produce the same database; --today pins it further.
+    span_days = int(args.cases * 2.4) + HISTORY_TAIL_DAYS
+    start = _at(args.today, span_days, hour=9)
     for index in range(args.cases):
         clock = seed_cases.Clock(start + timedelta(days=index * 2.4, hours=rng.randint(0, 6)))
         with transaction() as conn:
             summary = seed_cases.seed_one(conn, clock, rng, index)
         if not args.quiet:
             print(f"  {summary}")
-    print(f"\nSeeded {args.cases} cases of history.")
+    print(f"\nSeeded {args.cases} cases of history, {start.date()} to about {args.today}.")
 
     print("\nDemo cases:")
     labelled = []
     for scenario in SCENARIOS:
         with transaction() as conn:
-            number, note = scenario(conn, rng)
+            number, note = scenario(conn, rng, args.today)
         labelled.append((number, scenario.__name__, note))
         print(f"  {number}  {scenario.__name__:20} {note}")
 

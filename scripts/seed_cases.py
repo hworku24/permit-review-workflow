@@ -138,10 +138,15 @@ def _make_parties(conn, rng: random.Random, index: int) -> dict[str, UUID]:
         )
         parcel_id = cur.fetchone()["id"]
 
+        # UNVERIFIED, not ACTIVE. These licence numbers were generated, so nothing has
+        # checked them against the state replica, and recording ACTIVE here would be the
+        # exact collapse the licensing client refuses to make: "could not check" written
+        # down as "checked and it passed". The demo cases in seed_demo.py do run a real
+        # lookup, and those are the ones that end up ACTIVE.
         license_number = f"VA-CL-{rng.randint(30000, 99999):06d}"
         cur.execute(
             """INSERT INTO contractor (license_number, business_name, license_status)
-               VALUES (%s, %s, 'ACTIVE') RETURNING id""",
+               VALUES (%s, %s, 'UNVERIFIED') RETURNING id""",
             (license_number, f"{rng.choice(LAST_NAMES)} Construction LLC"),
         )
         contractor_id = cur.fetchone()["id"]
