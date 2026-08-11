@@ -12,7 +12,7 @@ municipalities. The engineering problems are real.
 
 Two things worth stating plainly. The repository was initialized after the code was
 written, so the commits are sequenced to follow the build order in
-[docs/05-user-stories.md](docs/05-user-stories.md) rather than a real calendar. And no
+[docs/05-user-stories.md](docs/05-user-stories.md) and not a real calendar. And no
 part of this has ever run in a municipal department. Every number in this README comes
 from the seeded case generator described below.
 
@@ -156,32 +156,114 @@ test, and an embedded database has neither. CI runs both suites.
 
 ## How it fits together
 
+```mermaid
+flowchart TB
+    subgraph people[" "]
+        direction LR
+        clerk["Intake clerk"]
+        reviewer["Discipline reviewer"]
+        supervisor["Supervisor"]
+    end
+
+    subgraph app["FastAPI application, one process"]
+        direction TB
+        ui["Staff screens<br/>queue, case, triage,<br/>ordinance, dashboard, admin"]
+        api["JSON API<br/>applications, tasks, queues,<br/>reports, ai"]
+        engine["Process engine<br/>state machine, guards, SLA clock,<br/>assignment, routing, escalation"]
+        ai["AI layer<br/>BM25 retrieval, grounded answers,<br/>intake triage, provider seam"]
+        integ["Integration layer<br/>retry, circuit breaker,<br/>attempt log"]
+    end
+
+    db[("PostgreSQL<br/>24 tables, 8 views,<br/>append-only audit")]
+    corpus[/"Zoning ordinance<br/>35 sections, on disk"/]
+    county["County property records<br/>SOAP 1.1 over HTTP"]
+    state["State licensing replica<br/>direct read-only connection"]
+
+    clerk --> ui
+    reviewer --> ui
+    supervisor --> ui
+    ui --> engine
+    api --> engine
+    ui --> ai
+    api --> ai
+    engine --> db
+    engine --> integ
+    ai --> corpus
+    ai -. "recommendations only,<br/>never a status change" .-> db
+    integ --> county
+    integ --> state
+    ui -. "reads reporting views directly" .-> db
+
+    classDef external fill:#fdf3e3,stroke:#8a5200,color:#8a5200
+    classDef store fill:#e7edf4,stroke:#1f4e79,color:#1f4e79
+    class county,state external
+    class db,corpus store
 ```
-                    FastAPI
-                       |
-              +--------+--------+
-              |                 |
-        process engine       AI layer
-     (states, SLA clock,   (retrieval,
-      assignment, audit)    extraction)
-              |                 |
-        +-----+-----+           |
-        |           |           |
-   PostgreSQL   integrations    corpus
-   (schema +    (SOAP, direct   (zoning
-    views)       DB connection)  ordinance)
-```
+
+The engine is the only thing that moves a case. Both the screens and the API call it, and
+neither writes a status column. The AI layer has no path that changes a status: it writes
+recommendations and reads the corpus, and a named human accepts or overrides. The screens
+read the reporting views directly for anything they only display, because the compliance
+number goes to city council and recomputing it in Python next to the SQL that already
+computes it is how two versions of one number start to disagree.
 
 `permitflow/process/` is where the interesting logic is. `states.py` holds the transition
 table with no database access in it at all, so it can be read and argued about in a client
 workshop. `engine.py` is the only thing that moves a case, and it owns three guarantees:
 nothing transitions that the state machine and the actor's role do not both permit, the
 denormalized status and the history row are written in one transaction, and the SLA clock
-pauses as a consequence of the target state rather than as something each action remembers
-to do.
+pauses as a consequence of the target state, not as something each action remembers to do.
 
 That last one is worth dwelling on. An action that forgets to pause the clock produces a
 wrong compliance number, so no action is trusted to remember.
+
+## What is deployed
+
+```mermaid
+flowchart TB
+    browser["Browser"]
+
+    subgraph aws["AWS, us-east-1"]
+        direction TB
+        cf["CloudFront<br/>TLS, its own certificate"]
+
+        subgraph vpc["Default VPC"]
+            direction TB
+            alb["Application load balancer<br/>HTTP :80"]
+
+            subgraph task["Fargate task, 0.25 vCPU"]
+                direction LR
+                capi["api<br/>:8000"]
+                csoap["soap-mock<br/>:8081"]
+            end
+
+            rds[("RDS PostgreSQL<br/>db.t4g.micro, not publicly accessible")]
+        end
+
+        ecr["ECR"]
+        sm["Secrets Manager<br/>db url, passphrase,<br/>session secret"]
+        logs["CloudWatch Logs"]
+    end
+
+    browser -- "HTTPS" --> cf
+    cf -- "HTTP, origin ranges only" --> alb
+    alb -- ":8000, from the ALB group only" --> capi
+    capi -- ":5432, from the task group only" --> rds
+    capi -- "SOAP" --> csoap
+    ecr -. "image pulled at start" .-> task
+    sm -. "injected at start" .-> task
+    task -. "stdout" .-> logs
+
+    classDef edge fill:#eaf5ee,stroke:#1f5c34,color:#1f5c34
+    classDef store fill:#e7edf4,stroke:#1f4e79,color:#1f4e79
+    class cf,alb edge
+    class rds,ecr,sm,logs store
+```
+
+Each hop accepts traffic only from the hop above it, and the database security group has no
+CIDR rule at all. [docs/07-architecture.md](docs/07-architecture.md) has both diagrams with
+the reasoning, and [deploy/aws/README.md](deploy/aws/README.md) has the cost and the
+teardown.
 
 ## Decisions I would defend in a review
 
@@ -219,7 +301,7 @@ and it is the kind of defect that only surfaces during an appeal.
 
 Neither external system belongs to Rivermont, and neither has a modern interface. That is
 the ordinary condition of public sector integration work, so the design accommodates it
-rather than fighting it.
+and does not fight it.
 
 | System | Protocol | Notes |
 |---|---|---|
@@ -228,7 +310,7 @@ rather than fighting it.
 
 Both go through one resilience policy: bounded retry with exponential backoff, a circuit
 breaker so a sustained outage stops costing every applicant three timeouts, and an
-attempt-level log so an integration dispute is settled with records rather than
+attempt-level log so an integration dispute is settled with records and not with
 recollection. A definitive answer, such as a parcel that genuinely does not exist, is not
 retried, because retrying a definitive answer is three times the latency for the same
 result.
@@ -270,7 +352,7 @@ both the recommendation and the decision are written to the audit log with the m
 prompt version. There is no endpoint in the AI layer that changes an application's status.
 
 It runs with no credentials by default. The offline provider is rule-based, deterministic,
-and genuinely useful rather than a stub, which is what lets CI test the AI behaviour at all.
+and genuinely useful, not a stub, which is what lets CI test the AI behaviour at all.
 A hosted Claude path is available when a key is configured.
 
 ## Documentation
