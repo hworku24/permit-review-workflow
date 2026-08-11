@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+
+{% block content %}
+<div class="panel narrow">
+  <h1>City of Rivermont permit system</h1>
+  <p class="note">
+    This is a demonstration deployment of a system built for a city that does not exist. The
+    passphrase below is a gate on a public address, not the city's single sign-on, and no
+    case behind it is real.
+  </p>
+
+  {% if error %}
+  <p class="banner failure">That passphrase is not right.</p>
+  {% endif %}
+
+  <form method="post" action="/ui/gate" class="config">
+    <label for="passphrase">Passphrase</label>
+    <input type="password" id="passphrase" name="passphrase" autofocus required>
+    <div class="actions">
+      <button type="submit">Sign in</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

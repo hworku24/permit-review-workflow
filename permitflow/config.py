@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     # AI-06: retrieval below this is treated as no support and the answer is withheld.
     ai_grounding_threshold: float = 0.35
 
+    # The user picker at /ui/ names an actor without proving anything, which is fine on a
+    # laptop and is not fine on a public URL. Setting a shared passphrase puts a sign-in in
+    # front of every screen. It is a demonstration gate, not the city's SSO, and the sign-in
+    # page says so. Left unset, the picker behaves as it always has.
+    demo_passphrase: str | None = None
+    # Signs the session cookie. Generated per process when unset, which logs everyone out on
+    # restart; a deployment sets it so a redeploy does not.
+    session_secret: str | None = None
+    session_hours: int = 12
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

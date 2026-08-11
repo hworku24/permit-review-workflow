@@ -7,7 +7,9 @@ piece of SQL and cannot drift.
 
 from __future__ import annotations
 
+import hmac
 import re
+import time
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -24,6 +26,7 @@ from ..ai.retrieval import load_index
 from ..config import get_settings
 from ..db import read_connection, transaction
 from ..process.states import Role
+from . import gate
 from .deps import ACTOR_COOKIE, NotSignedIn, current_actor, staff_directory, to_picker
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -1314,3 +1317,44 @@ def add_document_type(
         ),
         status_code=303,
     )
+
+
+# ---------------------------------------------------------------------------
+# The deployment gate
+# ---------------------------------------------------------------------------
+
+@router.get("/gate", response_class=HTMLResponse)
+def gate_form(request: Request, error: str = ""):
+    """The sign-in that stands between a public URL and the rest of the application."""
+    if not get_settings().demo_passphrase:
+        return RedirectResponse(url="/ui/", status_code=303)
+    return TEMPLATES.TemplateResponse(
+        request=request, name="gate.html", context={"actor": None, "error": error}
+    )
+
+
+@router.post("/gate")
+def gate_submit(request: Request, passphrase: str = Form(...)):
+    """Check the passphrase and set a signed, expiring cookie.
+
+    `compare_digest` so a wrong guess takes the same time as a nearly right one.
+    """
+    settings = get_settings()
+    configured = settings.demo_passphrase
+    if not configured:
+        return RedirectResponse(url="/ui/", status_code=303)
+
+    if not hmac.compare_digest(passphrase, configured):
+        return RedirectResponse(url="/ui/gate?error=1", status_code=303)
+
+    expires_at = int(time.time()) + settings.session_hours * 3600
+    response = RedirectResponse(url="/ui/", status_code=303)
+    response.set_cookie(
+        gate.GATE_COOKIE,
+        gate.issue(expires_at),
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        max_age=settings.session_hours * 3600,
+    )
+    return response

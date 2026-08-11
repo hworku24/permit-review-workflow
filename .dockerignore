@@ -1,0 +1,22 @@
+# Everything the image does not need. Keeps the build context small and keeps local
+# credentials, virtualenvs, and build output out of a layer by construction.
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.env
+docs/
+tests/
+licensing-verifier/
+*.md
+docker-compose.yml
+Dockerfile
+.dockerignore
+.DS_Store

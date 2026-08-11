@@ -28,6 +28,7 @@ from ..errors import (
     PermissionDenied,
 )
 from ..ui import routes as ui_routes
+from ..ui.gate import GateMiddleware
 from .routes import ai, applications, queues, reports, tasks
 
 app = FastAPI(
@@ -40,6 +41,10 @@ app = FastAPI(
         "for why that is not authentication."
     ),
 )
+
+# Added before the routers so it sees every request. Does nothing at all unless
+# DEMO_PASSPHRASE is set, which is what keeps a fresh clone credential-free.
+app.add_middleware(GateMiddleware)
 
 app.include_router(applications.router)
 app.include_router(tasks.router)
