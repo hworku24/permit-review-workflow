@@ -423,6 +423,7 @@ an actual engagement:
 | [05-user-stories.md](docs/05-user-stories.md) | Stories by sprint, with acceptance criteria written so they read as test cases |
 | [06-traceability.md](docs/06-traceability.md) | Every requirement traced to a design artifact, a module, and a test |
 | [07-architecture.md](docs/07-architecture.md) | Both diagrams, the security boundary, and what is not in the picture |
+| [case-study.md](docs/case-study.md) | The engagement written up for a reader who will not open the code |
 
 The traceability matrix is checked, not asserted. Every module path and test name in it was
 verified to exist.
