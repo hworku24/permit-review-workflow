@@ -177,10 +177,17 @@ later when someone asks why an application was routed to environmental review.
 |---|---|---|
 | `v_application_summary` | One row per application with applicant, parcel, status, days in state, open tasks | Operational |
 | `v_sla_status` | Business days elapsed net of pauses, allowance, days remaining, breach flag | FR-14, FR-16 |
+| `v_task_sla_status` | The same question one level down, per review task. Read by the escalation sweep | FR-16 |
 | `v_reviewer_workload` | Open tasks and oldest task age per reviewer and discipline | FR-24, P4 |
+| `v_discipline_bottleneck` | Open work, overdue work, and recent turnaround per discipline | FR-24, P4 |
 | `v_cycle_time` | Per application net business days from submission to decision | FR-22 |
 | `v_sla_compliance` | Monthly compliance rate by permit type against the council standard | FR-23 |
 | `v_open_escalations` | Unacknowledged escalations ordered by time past due | FR-17 |
+
+`v_reviewer_workload` and `v_discipline_bottleneck` answer two different questions that get
+confused with each other. The first is who is loaded. The second is where cases sit. A
+supervisor deciding whether to move a reviewer needs the second, and one person being busy
+is not the same fact as one discipline being the reason cases are late.
 
 Business day arithmetic is a SQL function, `business_days_between(start, end)`, which
 counts weekdays in the interval and subtracts matches in `holiday`. The same rule is

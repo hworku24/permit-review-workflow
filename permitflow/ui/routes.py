@@ -532,3 +532,129 @@ def ordinance(request: Request, q: str = "", case: str = ""):
             "corpus_size": len(load_index()),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Supervisor dashboard
+# ---------------------------------------------------------------------------
+
+def _headline(conn) -> dict:
+    """The four numbers a department director is actually accountable for.
+
+    Read from the same views the per-month tables read, so the summary at the top of the
+    page and the rows below it cannot disagree. Computing the headline separately in
+    Python is how a dashboard ends up contradicting itself.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT sum(decided_count)                                   AS decided,
+                   sum(met_count)                                       AS met,
+                   round(100.0 * sum(met_count) / nullif(sum(decided_count), 0), 1)
+                                                                        AS compliance_pct
+            FROM v_sla_compliance
+            """
+        )
+        compliance = cur.fetchone()
+
+        cur.execute(
+            """
+            SELECT round(avg(gross_business_days), 1)          AS mean_gross,
+                   round(avg(net_business_days), 1)            AS mean_net,
+                   round(avg(applicant_wait_business_days), 1) AS mean_wait,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY net_business_days) AS median_net,
+                   round(percentile_cont(0.9) WITHIN GROUP (ORDER BY net_business_days)::numeric, 1)
+                                                               AS p90_net,
+                   count(*)                                    AS decided
+            FROM v_cycle_time
+            WHERE decided_at IS NOT NULL
+            """
+        )
+        cycle = cur.fetchone()
+
+        cur.execute(
+            """
+            SELECT count(*) FILTER (WHERE status NOT IN
+                        ('ISSUED','DENIED','WITHDRAWN','EXPIRED')) AS open_cases,
+                   count(*) FILTER (WHERE clock_paused)            AS paused_cases
+            FROM v_application_summary
+            """
+        )
+        volume = cur.fetchone()
+
+    return {"compliance": compliance, "cycle": cycle, "volume": volume}
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request):
+    """Where the department stands: compliance, cycle time, workload, and what is stuck.
+
+    Every panel is a thin read over a view. The arithmetic stays in SQL because the
+    compliance figure goes to the city council, and a number recomputed in application
+    code is a number that will eventually disagree with the report it came from.
+    """
+    try:
+        actor = current_actor(request)
+    except NotSignedIn:
+        return to_picker(request)
+
+    with read_connection() as conn:
+        headline = _headline(conn)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT decided_month, permit_type_code, permit_type_name,
+                       council_standard_days, decided_count, met_count, compliance_pct,
+                       mean_net_days, median_net_days, p90_net_days
+                FROM v_sla_compliance
+                ORDER BY decided_month DESC, permit_type_code
+                """
+            )
+            compliance_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT decided_month,
+                       sum(decided_count)                                        AS decided,
+                       sum(met_count)                                            AS met,
+                       round(100.0 * sum(met_count) / nullif(sum(decided_count), 0), 1)
+                                                                                 AS compliance_pct
+                FROM v_sla_compliance
+                GROUP BY decided_month
+                ORDER BY decided_month
+                """
+            )
+            monthly = cur.fetchall()
+
+            cur.execute("SELECT * FROM v_discipline_bottleneck ORDER BY open_tasks DESC, discipline_code")
+            disciplines = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT username, full_name, discipline_code, active, open_tasks,
+                       completed_last_30_days, oldest_open_business_days
+                FROM v_reviewer_workload
+                WHERE open_tasks > 0 OR completed_last_30_days > 0
+                ORDER BY open_tasks DESC, oldest_open_business_days DESC NULLS LAST
+                """
+            )
+            workload = cur.fetchall()
+
+            cur.execute("SELECT * FROM v_open_escalations")
+            escalations = cur.fetchall()
+
+    return TEMPLATES.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={
+            "actor": actor,
+            "headline": headline,
+            "compliance_rows": compliance_rows,
+            "monthly": monthly,
+            "max_month_count": max((m["decided"] for m in monthly), default=0),
+            "disciplines": disciplines,
+            "workload": workload,
+            "escalations": escalations,
+        },
+    )

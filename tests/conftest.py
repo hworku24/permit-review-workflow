@@ -430,6 +430,75 @@ def overdue_task(committed_parties: dict[str, UUID]) -> dict:
     return _commit_under_review(committed_parties, datetime.now(UTC) - timedelta(days=120))
 
 
+def _commit_decided(committed_parties: dict[str, UUID], submitted_at: datetime, *, with_wait: bool) -> UUID:
+    """Drive one application all the way to ISSUED and commit it.
+
+    `with_wait` sends it back to the applicant once, which pauses the clock and puts a
+    non-zero applicant wait into the cycle time view. Without at least one of those, the
+    gross and net figures are identical and the split the dashboard draws proves nothing.
+    """
+    clock = FrozenClock(submitted_at)
+    with transaction() as conn:
+        engine = Engine(conn, clock=clock)
+        application_id = engine.create_application(
+            applicant_id=committed_parties["applicant_id"],
+            parcel_id=committed_parties["parcel_id"],
+            contractor_id=committed_parties["contractor_id"],
+            permit_type_code="BLD-RES-ALT",
+            scope_narrative="Rear addition, 640 sq ft. Value $180,000.",
+            declared_valuation=Decimal("180000"),
+            actor=APPLICANT,
+        )
+        engine.submit(application_id, APPLICANT)
+        clock.advance(days=1)
+        engine.complete_enrichment(application_id)
+
+        if with_wait:
+            clock.advance(days=1)
+            engine.return_incomplete(application_id, CLERK, ["site plan not drawn to scale"])
+            clock.advance(days=7)  # applicant time, clock paused
+            engine.resubmit(application_id, APPLICANT)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE application_document
+                   SET status='RECEIVED', filename='x.pdf', uploaded_at=%s, uploaded_by='t'
+                   WHERE application_id=%s AND status='MISSING'""",
+                (clock.now, str(application_id)),
+            )
+        clock.advance(days=1)
+        engine.accept_intake(application_id, CLERK)
+
+        clock.advance(days=5)
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT rt.id, rt.reviewer_id, r.username FROM review_task rt
+                   JOIN reviewer r ON r.id = rt.reviewer_id
+                   WHERE rt.application_id = %s AND rt.status IN ('PENDING','ASSIGNED','IN_PROGRESS')""",
+                (str(application_id),),
+            )
+            tasks = cur.fetchall()
+        for task in tasks:
+            actor = reviewer_actor(task)
+            engine.start_task(task["id"], actor)
+            engine.approve_task(task["id"], actor)
+
+        clock.advance(days=1)
+        engine.issue(application_id, SUPERVISOR)
+
+    return application_id
+
+
+@pytest.fixture
+def decided_cases(committed_parties: dict[str, UUID]) -> list[UUID]:
+    """Two issued cases, one of which spent time with the applicant."""
+    base = datetime.now(UTC) - timedelta(days=40)
+    return [
+        _commit_decided(committed_parties, base, with_wait=True),
+        _commit_decided(committed_parties, base + timedelta(days=5), with_wait=False),
+    ]
+
+
 @pytest.fixture
 def triaged_case(committed_parties: dict[str, UUID]) -> dict:
     """Committed, at screening, with a pending extraction that has withheld fields.

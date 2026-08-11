@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<p class="crumb">
+  <a href="/ui/queue">My queue</a>
+  <span class="sep">|</span>
+  <a href="/ui/ordinance">Ask the ordinance</a>
+</p>
+
+<div class="panel">
+  <h1>Where the department stands</h1>
+  <p class="summary">
+    Every figure on this page is read from a reporting view. None of it is recalculated
+    here.
+  </p>
+
+  <div class="tiles">
+    <div class="tile">
+      <div class="tile-label">Council standard met</div>
+      <div class="tile-value">{{ headline.compliance.compliance_pct or 0 }}%</div>
+      <div class="tile-note">
+        {{ headline.compliance.met or 0 }} of {{ headline.compliance.decided or 0 }} decided
+      </div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Mean review time</div>
+      <div class="tile-value">{{ headline.cycle.mean_net or 0 }}</div>
+      <div class="tile-note">business days, net of applicant wait</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Mean applicant wait</div>
+      <div class="tile-value">{{ headline.cycle.mean_wait or 0 }}</div>
+      <div class="tile-note">business days the clock was stopped</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Open cases</div>
+      <div class="tile-value">{{ headline.volume.open_cases or 0 }}</div>
+      <div class="tile-note">{{ headline.volume.paused_cases or 0 }} sitting with applicants</div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Cycle time</h2>
+  <p class="note">
+    Gross is the whole elapsed time. Applicant wait is what the clock was stopped for. Net
+    is what the department is answerable for, and gross minus wait equals net.
+  </p>
+
+  {% set gross = headline.cycle.mean_gross or 0 %}
+  {% set wait = headline.cycle.mean_wait or 0 %}
+  {% set net = headline.cycle.mean_net or 0 %}
+  {% if gross %}
+  <div class="split">
+    <div class="split-bar">
+      <div class="seg net" style="width: {{ (net / gross * 100)|round(1) }}%">
+        <span>net {{ net }}</span>
+      </div>
+      <div class="seg wait" style="width: {{ (wait / gross * 100)|round(1) }}%">
+        <span>applicant wait {{ wait }}</span>
+      </div>
+    </div>
+    <div class="split-scale">0 to {{ gross }} business days, mean of {{ headline.cycle.decided }} decided cases</div>
+  </div>
+  {% endif %}
+
+  <div class="facts">
+    <div><dt>Mean gross</dt><dd>{{ headline.cycle.mean_gross or 0 }} days</dd></div>
+    <div><dt>Mean net</dt><dd>{{ headline.cycle.mean_net or 0 }} days</dd></div>
+    <div><dt>Median net</dt><dd>{{ headline.cycle.median_net or 0 }} days</dd></div>
+    <div><dt>90th percentile net</dt><dd>{{ headline.cycle.p90_net or 0 }} days</dd></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Compliance by month</h2>
+  {% if not monthly %}
+    <p class="note">Nothing decided yet.</p>
+  {% else %}
+  <table class="grid">
+    <thead>
+      <tr><th>Month</th><th class="num">Decided</th><th class="num">Met</th><th class="num">Rate</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for row in monthly|reverse %}
+      <tr>
+        <td class="nowrap">{{ row.decided_month.strftime('%b %Y') }}</td>
+        <td class="num">{{ row.decided }}</td>
+        <td class="num">{{ row.met }}</td>
+        <td class="num {{ 'sla-breached' if row.compliance_pct < 80 }}">{{ row.compliance_pct }}%</td>
+        <td>
+          <div class="meter">
+            <div class="meter-fill {{ 'low' if row.compliance_pct < 80 else 'ok' }}"
+                 style="width: {{ row.compliance_pct }}%"></div>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Compliance by permit type</h2>
+  <p class="note">
+    Each permit type is measured against its own council standard, which is why a 30 day
+    commercial review and a 20 day residential one can both be on target.
+  </p>
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Month</th><th>Permit type</th><th class="num">Standard</th>
+        <th class="num">Decided</th><th class="num">Met</th><th class="num">Rate</th>
+        <th class="num">Mean net</th><th class="num">Median</th><th class="num">p90</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in compliance_rows %}
+      <tr>
+        <td class="nowrap">{{ row.decided_month.strftime('%b %Y') }}</td>
+        <td>{{ row.permit_type_name }}</td>
+        <td class="num">{{ row.council_standard_days }}</td>
+        <td class="num">{{ row.decided_count }}</td>
+        <td class="num">{{ row.met_count }}</td>
+        <td class="num {{ 'sla-breached' if row.compliance_pct < 80 }}">{{ row.compliance_pct }}%</td>
+        <td class="num">{{ row.mean_net_days }}</td>
+        <td class="num">{{ row.median_net_days }}</td>
+        <td class="num">{{ row.p90_net_days }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Where cases sit</h2>
+  <p class="note">
+    Open work and recent turnaround per discipline. A deep queue and a fast turnaround mean
+    the work arrived. A deep queue and a slow turnaround mean the discipline is the reason
+    cases are late, and those want different answers.
+  </p>
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Discipline</th><th class="num">Open</th><th class="num">Overdue</th>
+        <th class="num">Due soon</th><th class="num">Oldest</th><th class="num">Mean age</th>
+        <th class="num">Closed in 30 days</th><th class="num">Mean turnaround</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in disciplines %}
+      <tr>
+        <td>{{ row.discipline_name }}{% if not row.active %} <span class="muted">(inactive)</span>{% endif %}</td>
+        <td class="num">{{ row.open_tasks }}</td>
+        <td class="num {{ 'sla-breached' if row.breached_tasks }}">{{ row.breached_tasks }}</td>
+        <td class="num">{{ row.at_risk_tasks }}</td>
+        <td class="num">{{ row.oldest_open_business_days if row.oldest_open_business_days is not none else 'none open' }}</td>
+        <td class="num">{{ row.mean_open_business_days if row.mean_open_business_days is not none else 'none open' }}</td>
+        <td class="num">{{ row.completed_last_30_days }}</td>
+        <td class="num">{{ row.mean_business_days_to_complete if row.mean_business_days_to_complete is not none else 'none closed' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Reviewer workload</h2>
+  {% if not workload %}
+    <p class="note">Nobody has open work or recent completions.</p>
+  {% else %}
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Reviewer</th><th>Discipline</th><th class="num">Open</th>
+        <th class="num">Closed in 30 days</th><th class="num">Oldest open</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in workload %}
+      <tr>
+        <td>{{ row.full_name }}{% if not row.active %} <span class="muted">(inactive)</span>{% endif %}</td>
+        <td>{{ row.discipline_code }}</td>
+        <td class="num">{{ row.open_tasks }}</td>
+        <td class="num">{{ row.completed_last_30_days }}</td>
+        <td class="num">{{ row.oldest_open_business_days if row.oldest_open_business_days is not none else 'none open' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Open escalations</h2>
+  {% if not escalations %}
+    <p class="note">Nothing escalated and unacknowledged.</p>
+  {% else %}
+  <p class="note">
+    Breaches first, then by how far past due. Raised by the sweep, not by anyone noticing.
+  </p>
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Level</th><th>Case</th><th>Permit type</th><th>Discipline</th>
+        <th>Reviewer</th><th class="num">Days past due</th><th>Raised</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in escalations %}
+      <tr>
+        <td>
+          <span class="pill {{ 'sla-breached' if row.level == 'BREACH' else 'sla-at-risk' }}">
+            {{ row.level }}
+          </span>
+        </td>
+        <td><a href="/ui/case/{{ row.application_id }}">{{ row.application_number }}</a></td>
+        <td>{{ row.permit_type_name }}</td>
+        <td>{{ row.discipline_code or 'whole case' }}</td>
+        <td>{{ row.reviewer_name or 'unassigned' }}</td>
+        <td class="num">{{ row.business_days_past_due }}</td>
+        <td class="nowrap">{{ row.raised_at.strftime('%d %b %Y') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

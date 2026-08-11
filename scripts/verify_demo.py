@@ -142,6 +142,17 @@ def run_checks(conn) -> None:
     escalations = one(conn, "SELECT count(*) AS n FROM v_open_escalations")
     check("dashboard", "open escalations exist", escalations > 0, f"{escalations} open")
 
+    disciplines = one(conn, "SELECT count(*) AS n FROM v_discipline_bottleneck WHERE open_tasks > 0")
+    check("dashboard", "at least one discipline is holding work", disciplines > 0,
+          f"{disciplines} with open work")
+
+    turnaround = one(
+        conn,
+        "SELECT count(*) AS n FROM v_discipline_bottleneck WHERE mean_business_days_to_complete IS NOT NULL",
+    )
+    check("dashboard", "recent turnaround is measurable", turnaround > 0,
+          f"{turnaround} disciplines closed work")
+
     compliance = one(
         conn,
         "SELECT round(100.0*sum(met_count)/nullif(sum(decided_count),0),1) AS pct FROM v_sla_compliance",

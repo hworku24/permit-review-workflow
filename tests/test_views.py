@@ -261,3 +261,65 @@ class TestOpenEscalations:
                 (str(escalation_id),),
             )
             assert cur.fetchone()["n"] == 0
+
+
+class TestDisciplineBottleneck:
+    """v_discipline_bottleneck: where cases sit, as opposed to who is loaded."""
+
+    def test_every_configured_discipline_appears_even_with_no_work(self, conn) -> None:
+        """A discipline missing from the list reads as zero, and zero reads as measured."""
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) AS n FROM discipline")
+            configured = cur.fetchone()["n"]
+            cur.execute("SELECT count(*) AS n FROM v_discipline_bottleneck")
+            listed = cur.fetchone()["n"]
+        assert listed == configured
+
+    def test_open_work_is_counted_against_its_discipline(self, conn, under_review) -> None:
+        application_id, current_task = under_review()
+        task = current_task("ZONING")
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT open_tasks FROM v_discipline_bottleneck WHERE discipline_code = 'ZONING'"
+            )
+            assert cur.fetchone()["open_tasks"] >= 1
+            cur.execute(
+                "SELECT open_tasks FROM v_discipline_bottleneck WHERE discipline_code = 'FIRE'"
+            )
+            # BLD-RES-ALT does not route to fire, so it stays at zero rather than absent.
+            assert cur.fetchone()["open_tasks"] == 0
+        assert task is not None
+
+    def test_an_approved_task_stops_counting_as_open(
+        self, conn, engine: Engine, under_review
+    ) -> None:
+        application_id, current_task = under_review()
+        task = current_task("ZONING")
+        engine.start_task(task["id"], reviewer_actor(task))
+        engine.approve_task(task["id"], reviewer_actor(task))
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT open_tasks, completed_last_30_days
+                   FROM v_discipline_bottleneck WHERE discipline_code = 'ZONING'"""
+            )
+            row = cur.fetchone()
+        assert row["open_tasks"] == 0
+        assert row["completed_last_30_days"] == 1
+
+    def test_a_breached_task_is_counted_as_overdue(self, conn, engine: Engine, under_review) -> None:
+        application_id, current_task = under_review()
+        task = current_task("ZONING")
+
+        # Age the assignment past the allowance. The view reads the clock, so moving the
+        # assignment backwards is the same thing as time passing.
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE review_task SET assigned_at = now() - interval '200 days' WHERE id = %s",
+                (str(task["id"]),),
+            )
+            cur.execute(
+                "SELECT breached_tasks FROM v_discipline_bottleneck WHERE discipline_code = 'ZONING'"
+            )
+            assert cur.fetchone()["breached_tasks"] == 1

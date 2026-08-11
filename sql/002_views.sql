@@ -295,4 +295,56 @@ ORDER BY
 COMMENT ON VIEW v_open_escalations IS
     'Unacknowledged escalations, breaches first, then by how far past due. Backs FR-17.';
 
+-- ---------------------------------------------------------------------------
+-- v_discipline_bottleneck
+-- FR-24 and pain point P4 from the other direction. v_reviewer_workload answers
+-- "who is loaded"; this answers "where do cases sit". A supervisor deciding whether
+-- to move a reviewer needs the second question, and one reviewer being busy is not
+-- the same fact as one discipline being the reason cases are late.
+--
+-- Every configured discipline appears, including ones with no work, because a
+-- discipline missing from the list reads as zero and a discipline showing zero reads
+-- as measured.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW v_discipline_bottleneck AS
+SELECT
+    d.code                      AS discipline_code,
+    d.name                      AS discipline_name,
+    d.active,
+
+    count(t.review_task_id) FILTER (
+        WHERE t.status IN ('PENDING', 'ASSIGNED', 'IN_PROGRESS')
+    )                           AS open_tasks,
+
+    count(t.review_task_id) FILTER (WHERE t.sla_state = 'BREACHED')  AS breached_tasks,
+    count(t.review_task_id) FILTER (WHERE t.sla_state = 'AT_RISK')   AS at_risk_tasks,
+    count(t.review_task_id) FILTER (WHERE t.sla_state = 'UNASSIGNED') AS unassigned_tasks,
+
+    max(t.business_days_open) FILTER (
+        WHERE t.status IN ('PENDING', 'ASSIGNED', 'IN_PROGRESS')
+    )                           AS oldest_open_business_days,
+
+    round(avg(t.business_days_open) FILTER (
+        WHERE t.status IN ('PENDING', 'ASSIGNED', 'IN_PROGRESS')
+    ), 1)                       AS mean_open_business_days,
+
+    count(t.review_task_id) FILTER (
+        WHERE rt.completed_at > now() - interval '30 days'
+    )                           AS completed_last_30_days,
+
+    -- Turnaround on recently closed work, which is the number that says whether a
+    -- queue is deep because the discipline is slow or because the work arrived.
+    round(avg(business_days_between(rt.assigned_at, rt.completed_at)) FILTER (
+        WHERE rt.completed_at > now() - interval '30 days' AND rt.assigned_at IS NOT NULL
+    ), 1)                       AS mean_business_days_to_complete
+
+FROM discipline d
+LEFT JOIN v_task_sla_status t ON t.discipline_code = d.code
+LEFT JOIN review_task rt ON rt.id = t.review_task_id
+GROUP BY d.code, d.name, d.active;
+
+COMMENT ON VIEW v_discipline_bottleneck IS
+    'Open work, overdue work, and recent turnaround per discipline. Answers where cases sit.';
+
 COMMIT;
