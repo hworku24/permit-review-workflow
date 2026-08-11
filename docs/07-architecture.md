@@ -12,12 +12,9 @@ describes, and nobody notices.
 
 ```mermaid
 flowchart TB
-    subgraph people[" "]
-        direction LR
-        clerk["Intake clerk"]
-        reviewer["Discipline reviewer"]
-        supervisor["Supervisor"]
-    end
+    clerk["Intake clerk"]
+    reviewer["Discipline reviewer"]
+    supervisor["Supervisor"]
 
     subgraph app["FastAPI application, one process"]
         direction TB
@@ -48,8 +45,10 @@ flowchart TB
     integ --> state
     ui -. "reads reporting views directly" .-> db
 
+    classDef person fill:#f2f4f6,stroke:#5c6470,color:#1a1d21
     classDef external fill:#fdf3e3,stroke:#8a5200,color:#8a5200
     classDef store fill:#e7edf4,stroke:#1f4e79,color:#1f4e79
+    class clerk,reviewer,supervisor person
     class county,state external
     class db,corpus store
 ```
