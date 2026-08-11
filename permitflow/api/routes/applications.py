@@ -295,3 +295,50 @@ def get_history(application_id: UUID, actor: CurrentActor) -> dict:
             "transitions": transitions,
             "audit": audit.history(conn, "application", application_id),
         }
+
+
+@router.get("/{application_id}/documents")
+def get_documents(application_id: UUID, actor: CurrentActor) -> list[dict]:
+    """The document checklist, with what is outstanding and what arrived.
+
+    The summary carries a count of what is missing. A count is enough for a queue and not
+    enough for anybody who has to act on it: an applicant told "three documents missing"
+    still has to phone the front desk to find out which three, which is the round trip this
+    system exists to remove.
+    """
+    with read_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ad.document_type_code, dt.name AS document_name, ad.status,
+                   ad.filename, ad.uploaded_at, ad.uploaded_by,
+                   ad.waived_by, ad.waiver_reason
+            FROM application_document ad
+            LEFT JOIN document_type dt ON dt.code = ad.document_type_code
+            WHERE ad.application_id = %s
+            ORDER BY (ad.status = 'MISSING') DESC, ad.document_type_code
+            """,
+            (str(application_id),),
+        )
+        return cur.fetchall()
+
+
+@router.get("/{application_id}/tasks")
+def get_tasks(application_id: UUID, actor: CurrentActor) -> list[dict]:
+    """Every review task on the case, including closed rounds.
+
+    Earlier rounds stay in the response for the same reason they stay on the case screen:
+    what a reviewer said the first time is most of what a case history is for.
+    """
+    with read_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT review_task_id, discipline_code, round, status,
+                   reviewer_username, reviewer_name, assigned_at, sla_due_at,
+                   allowance_days, business_days_open, sla_state
+            FROM v_task_sla_status
+            WHERE application_id = %s
+            ORDER BY round DESC, discipline_code
+            """,
+            (str(application_id),),
+        )
+        return cur.fetchall()

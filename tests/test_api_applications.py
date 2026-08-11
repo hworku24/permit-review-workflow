@@ -344,3 +344,51 @@ class TestReports:
     def test_workload_is_readable(self, api_client) -> None:
         rows = api_client.get("/queues/workload", headers=hdr(SUPERVISOR)).json()
         assert rows and {"username", "discipline_code", "open_tasks"} <= set(rows[0])
+
+
+class TestReadingTheChecklistAndTheReviews:
+    """A count is enough for a queue and not enough for anybody who has to act on it.
+
+    Both of these were missing until a full workflow walkthrough over HTTP could not find
+    out which documents were outstanding or which tasks existed. The summary said "three
+    missing" and stopped there.
+    """
+
+    def test_documents_name_what_is_outstanding(self, api_client, committed_parties) -> None:
+        response = api_client.post(
+            "/applications",
+            headers=hdr("applicant-a"),
+            json={
+                "applicant_id": str(committed_parties["applicant_id"]),
+                "parcel_id": str(committed_parties["parcel_id"]),
+                "permit_type_code": "BLD-RES-ALT",
+                "scope_narrative": "Rear addition, 640 sq ft.",
+                "declared_valuation": "180000",
+            },
+        )
+        application_id = response.json()["application_id"]
+        api_client.post(f"/applications/{application_id}/submit", headers=hdr("applicant-a"))
+
+        documents = api_client.get(
+            f"/applications/{application_id}/documents", headers=hdr("mcarrero")
+        ).json()
+        assert documents
+        missing = [d for d in documents if d["status"] == "MISSING"]
+        assert missing, "a fresh application should be waiting on documents"
+        assert all(d["document_type_code"] for d in missing)
+        # Named, not counted.
+        assert any(d["document_name"] for d in missing)
+
+    def test_tasks_list_every_round(self, api_client, application_under_review) -> None:
+        tasks = api_client.get(
+            f"/applications/{application_under_review['application_id']}/tasks",
+            headers=hdr("mcarrero"),
+        ).json()
+        assert tasks
+        assert {t["discipline_code"] for t in tasks}
+        assert all("sla_state" in t for t in tasks)
+
+    def test_both_need_an_actor(self, api_client, application_under_review) -> None:
+        case = application_under_review["application_id"]
+        assert api_client.get(f"/applications/{case}/documents").status_code == 401
+        assert api_client.get(f"/applications/{case}/tasks").status_code == 401
