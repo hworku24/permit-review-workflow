@@ -382,3 +382,15 @@ table.grid.compact th, table.grid.compact td { padding: 0.35rem 0.5rem; }
 .checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 0.35rem; }
 .check { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; color: var(--ink); margin: 0; }
 .config .actions { margin-top: 1.1rem; }
+
+.inline-edit { display: flex; gap: 0.35rem; align-items: center; }
+.inline-edit input[type="number"] {
+  font: inherit;
+  width: 4.5rem;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  text-align: right;
+}
+.inline-edit button { padding: 0.2rem 0.6rem; font-size: 0.85rem; }
+.config .actions a.chip { display: inline-flex; align-items: center; }

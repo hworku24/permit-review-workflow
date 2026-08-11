@@ -154,6 +154,132 @@
   {% endif %}
 </div>
 
+{% if pending_standard %}
+{% set imp = pending_standard.impact %}
+<div class="panel">
+  <h2>Confirm a retroactive change</h2>
+  <p class="banner">
+    Moving {{ pending_standard.permit_type_code }} from {{ pending_standard.current }} to
+    {{ pending_standard.proposed }} days changes what the department has already reported.
+    The compliance view applies the current standard to every case ever decided.
+  </p>
+  <div class="facts">
+    <div><dt>Decided cases affected</dt><dd>{{ imp.decided }}</dd></div>
+    <div><dt>Met today</dt><dd>{{ imp.met_now }} ({{ imp.pct_now }}%)</dd></div>
+    <div><dt>Met after the change</dt><dd>{{ imp.met_after }} ({{ imp.pct_after }}%)</dd></div>
+    <div>
+      <dt>Cases changing side</dt>
+      <dd class="{{ 'sla-breached' if imp.moved }}">{{ imp.moved }}</dd>
+    </div>
+  </div>
+  <p class="note">
+    Going ahead is allowed, because a council genuinely does change the standard. The audit
+    row records the compliance figure before and after, so the movement can be explained
+    later by somebody who was not in the room.
+  </p>
+  <form method="post" action="/ui/admin/council-standard" class="config">
+    <input type="hidden" name="permit_type_code" value="{{ pending_standard.permit_type_code }}">
+    <input type="hidden" name="council_standard_days" value="{{ pending_standard.proposed }}">
+    <input type="hidden" name="confirm" value="yes">
+    <div class="actions">
+      <button type="submit">Change it and record the movement</button>
+      <a class="chip" href="/ui/admin">Leave it alone</a>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Phase allowances</h2>
+  <p class="note">
+    Each phase has its own allowance, and the phases add up to the council standard for that
+    permit type. A discipline row overrides the general one for that discipline only.
+  </p>
+  <p class="note">
+    Changing an allowance affects tasks opened after the change. Open tasks keep the
+    allowance they opened with, because <code>review_task.allowance_days</code> is written
+    when the task is created. A supervisor cannot make a reviewer late, or on time, by
+    editing configuration underneath them.
+  </p>
+
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Permit type</th><th>Phase</th><th>Discipline</th>
+        <th class="num">Allowance</th><th class="num">Phases total</th>
+        <th class="num">Council standard</th>{% if may_edit %}<th>Change</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in policies %}
+      <tr>
+        <td>{{ row.permit_type_name }} <code>{{ row.permit_type_code }}</code></td>
+        <td>{{ row.phase }}</td>
+        <td>{{ row.discipline_code or 'any' }}</td>
+        <td class="num">{{ row.allowance_days }} days</td>
+        <td class="num {{ 'sla-breached' if row.base_phase_total != row.council_standard_days }}">
+          {{ row.base_phase_total }}
+        </td>
+        <td class="num">{{ row.council_standard_days }}</td>
+        {% if may_edit %}
+        <td>
+          <form method="post" action="/ui/admin/sla" class="inline-edit">
+            <input type="hidden" name="policy_id" value="{{ row.id }}">
+            <input type="number" name="allowance_days" value="{{ row.allowance_days }}"
+                   min="1" max="365" required>
+            <button type="submit">Save</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="note">
+    A phases total that does not match the council standard is flagged. Nothing stops the
+    edit, because a department may well be mid-way through rebalancing, but a mismatch means
+    the phase clocks and the number reported to council no longer describe the same promise.
+  </p>
+</div>
+
+<div class="panel">
+  <h2>Council standard</h2>
+  <p class="banner failure">
+    This one is retroactive. The compliance view applies the current standard to every case
+    ever decided, so changing it moves figures the department has already published. The
+    screen asks for confirmation and shows the size of the movement first.
+  </p>
+  <table class="grid">
+    <thead>
+      <tr><th>Permit type</th><th class="num">Standard</th>{% if may_edit %}<th>Change</th>{% endif %}</tr>
+    </thead>
+    <tbody>
+      {% for permit in permit_types %}
+      <tr>
+        <td>{{ permit.name }} <code>{{ permit.code }}</code></td>
+        <td class="num">{{ permit.council_standard_days }} days</td>
+        {% if may_edit %}
+        <td>
+          <form method="post" action="/ui/admin/council-standard" class="inline-edit">
+            <input type="hidden" name="permit_type_code" value="{{ permit.code }}">
+            <input type="number" name="council_standard_days"
+                   value="{{ permit.council_standard_days }}" min="1" max="365" required>
+            <button type="submit">Review the change</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="note">
+    The fix that would stop this being retroactive is to write the standard onto each
+    application when it is decided, so a case keeps the promise it was measured against.
+    That is a schema change and it would rewrite existing rows, so it is written down here
+    as a decision, not made quietly.
+  </p>
+</div>
+
 <div class="panel">
   <h2>What this does not do</h2>
   <p class="note">

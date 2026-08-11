@@ -299,3 +299,248 @@ def _disciplines_on(application_id) -> set[str]:
             (str(application_id),),
         )
         return {r["discipline_code"] for r in cur.fetchall()}
+
+
+def _policy_id(permit_type: str, phase: str, discipline=None) -> str:
+    with read_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT id FROM sla_policy
+               WHERE permit_type_code = %s AND phase = %s
+                 AND discipline_code IS NOT DISTINCT FROM %s""",
+            (permit_type, phase, discipline),
+        )
+        return str(cur.fetchone()["id"])
+
+
+def _open_case(committed_parties, permit_type: str = "BLD-RES-ALT"):
+    """Drive one application to UNDER_REVIEW and return its id."""
+    with transaction() as conn:
+        engine = Engine(conn)
+        application_id = engine.create_application(
+            applicant_id=committed_parties["applicant_id"],
+            parcel_id=committed_parties["parcel_id"],
+            contractor_id=committed_parties["contractor_id"],
+            permit_type_code=permit_type,
+            scope_narrative="Rear addition, 640 sq ft. Value $180,000.",
+            declared_valuation=180000,
+            actor=APPLICANT,
+        )
+        engine.submit(application_id, APPLICANT)
+        engine.complete_enrichment(application_id)
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE application_document SET status='RECEIVED', filename='x.pdf',
+                   uploaded_at=now(), uploaded_by='t'
+                   WHERE application_id=%s AND status='MISSING'""",
+                (str(application_id),),
+            )
+        engine.accept_intake(application_id, CLERK)
+    return application_id
+
+
+class TestPhaseAllowance:
+    def test_the_screen_lists_the_policies(self, api_client) -> None:
+        signed_in(api_client)
+        body = text_of(api_client.get("/ui/admin").text)
+        assert "Phase allowances" in body
+        assert "REVIEW_TASK" in body
+
+    def test_a_reviewer_may_not_change_one(self, api_client) -> None:
+        signed_in(api_client, "pvasquez")
+        response = api_client.post(
+            "/ui/admin/sla",
+            data={"policy_id": _policy_id("BLD-RES-ALT", "REVIEW_TASK"), "allowance_days": 5},
+        )
+        assert response.status_code == 403
+
+    def test_an_absurd_allowance_is_refused(self, api_client) -> None:
+        signed_in(api_client)
+        response = api_client.post(
+            "/ui/admin/sla",
+            data={"policy_id": _policy_id("BLD-RES-ALT", "REVIEW_TASK"), "allowance_days": 0},
+            follow_redirects=True,
+        )
+        assert "between 1 and 365" in text_of(response.text)
+
+    def test_a_new_task_takes_the_new_allowance(self, api_client, committed_parties) -> None:
+        """The checklist item: the workflow uses the new value with no code change."""
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/sla",
+            data={"policy_id": _policy_id("BLD-RES-ALT", "REVIEW_TASK"), "allowance_days": 9},
+            follow_redirects=False,
+        )
+        application_id = _open_case(committed_parties)
+
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT allowance_days FROM review_task WHERE application_id = %s",
+                (str(application_id),),
+            )
+            allowances = {r["allowance_days"] for r in cur.fetchall()}
+        assert allowances == {9}
+
+    def test_an_open_task_keeps_the_allowance_it_opened_with(
+        self, api_client, committed_parties
+    ) -> None:
+        """A supervisor cannot make a reviewer late by editing configuration underneath them."""
+        application_id = _open_case(committed_parties)
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT allowance_days FROM review_task WHERE application_id = %s",
+                (str(application_id),),
+            )
+            before = {r["allowance_days"] for r in cur.fetchall()}
+
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/sla",
+            data={"policy_id": _policy_id("BLD-RES-ALT", "REVIEW_TASK"), "allowance_days": 2},
+            follow_redirects=False,
+        )
+
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT allowance_days FROM review_task WHERE application_id = %s",
+                (str(application_id),),
+            )
+            after = {r["allowance_days"] for r in cur.fetchall()}
+        assert after == before
+        assert 2 not in after
+
+    def test_a_discipline_override_beats_the_general_row(
+        self, api_client, committed_parties
+    ) -> None:
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/sla",
+            data={
+                "policy_id": _policy_id("BLD-COM-NEW", "REVIEW_TASK", "ENVIRONMENTAL"),
+                "allowance_days": 31,
+            },
+            follow_redirects=False,
+        )
+        application_id = _open_case(committed_parties, permit_type="BLD-COM-NEW")
+
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT discipline_code, allowance_days FROM review_task
+                   WHERE application_id = %s""",
+                (str(application_id),),
+            )
+            by_discipline = {r["discipline_code"]: r["allowance_days"] for r in cur.fetchall()}
+
+        assert by_discipline["ENVIRONMENTAL"] == 31
+        assert by_discipline["ZONING"] != 31
+
+    def test_the_change_is_audited_with_before_and_after(self, api_client) -> None:
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/sla",
+            data={"policy_id": _policy_id("BLD-RES-ACC", "REVIEW_TASK"), "allowance_days": 13},
+            follow_redirects=False,
+        )
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT actor, before_value, after_value FROM audit_log
+                   WHERE action = 'change:sla_allowance'"""
+            )
+            row = cur.fetchone()
+        assert row["actor"] == "dhollis"
+        assert row["before_value"]["allowance_days"] == 11
+        assert row["after_value"]["allowance_days"] == 13
+
+
+class TestCouncilStandard:
+    def test_a_change_with_no_effect_on_history_goes_straight_through(self, api_client) -> None:
+        """Nothing decided yet, so there is nothing to rewrite and nothing to confirm."""
+        signed_in(api_client)
+        response = api_client.post(
+            "/ui/admin/council-standard",
+            data={"permit_type_code": "BLD-RES-ALT", "council_standard_days": 21},
+            follow_redirects=True,
+        )
+        assert "standard is now 21 days" in text_of(response.text)
+
+    def test_a_change_that_rewrites_history_asks_first(self, api_client, decided_cases) -> None:
+        signed_in(api_client)
+        response = api_client.post(
+            "/ui/admin/council-standard",
+            data={"permit_type_code": "BLD-RES-ALT", "council_standard_days": 2},
+            follow_redirects=True,
+        )
+        body = text_of(response.text)
+        assert "Confirm a retroactive change" in body
+        assert "Cases changing side" in body
+
+        # Nothing changed yet.
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT council_standard_days FROM permit_type WHERE code = 'BLD-RES-ALT'")
+            assert cur.fetchone()["council_standard_days"] == 20
+
+    def test_confirming_applies_it_and_records_the_movement(
+        self, api_client, decided_cases
+    ) -> None:
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT round(100.0*count(*) FILTER (WHERE net_business_days <= 20)/count(*),1) AS pct
+                   FROM v_cycle_time WHERE permit_type_code='BLD-RES-ALT' AND decided_at IS NOT NULL"""
+            )
+            before_pct = cur.fetchone()["pct"]
+
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/council-standard",
+            data={
+                "permit_type_code": "BLD-RES-ALT",
+                "council_standard_days": 2,
+                "confirm": "yes",
+            },
+            follow_redirects=False,
+        )
+
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT council_standard_days FROM permit_type WHERE code='BLD-RES-ALT'")
+            assert cur.fetchone()["council_standard_days"] == 2
+
+            cur.execute(
+                """SELECT before_value, after_value FROM audit_log
+                   WHERE action = 'change:council_standard'"""
+            )
+            row = cur.fetchone()
+
+        assert row["before_value"]["council_standard_days"] == 20
+        assert row["after_value"]["council_standard_days"] == 2
+        assert float(row["before_value"]["reported_compliance_pct"]) == float(before_pct)
+        # Signed, and negative here: tightening the standard turns met cases into missed
+        # ones. The direction is worth keeping in the row, so the message says which way.
+        assert row["after_value"]["decided_cases_reclassified"] < 0
+
+    def test_the_published_compliance_figure_really_does_move(
+        self, api_client, decided_cases
+    ) -> None:
+        """Why the confirmation exists. The view joins permit_type live."""
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT sum(met_count) AS met FROM v_sla_compliance")
+            met_before = cur.fetchone()["met"]
+
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/council-standard",
+            data={"permit_type_code": "BLD-RES-ALT", "council_standard_days": 1, "confirm": "yes"},
+            follow_redirects=False,
+        )
+
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT sum(met_count) AS met FROM v_sla_compliance")
+            met_after = cur.fetchone()["met"]
+
+        assert met_after < met_before
+
+    def test_a_reviewer_may_not_change_it(self, api_client) -> None:
+        signed_in(api_client, "pvasquez")
+        response = api_client.post(
+            "/ui/admin/council-standard",
+            data={"permit_type_code": "BLD-RES-ALT", "council_standard_days": 25},
+        )
+        assert response.status_code == 403

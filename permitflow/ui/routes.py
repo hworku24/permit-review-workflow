@@ -805,7 +805,13 @@ def _reviewers(conn) -> list[dict]:
 
 
 @router.get("/admin", response_class=HTMLResponse)
-def admin(request: Request, saved: str = "", error: str = ""):
+def admin(
+    request: Request,
+    saved: str = "",
+    error: str = "",
+    confirm_type: str = "",
+    confirm_days: int = 0,
+):
     """Configuration a department can change without a developer.
 
     Everything on this screen is a row in a reference table. Nothing here is a migration,
@@ -818,12 +824,25 @@ def admin(request: Request, saved: str = "", error: str = ""):
         return to_picker(request)
 
     with read_connection() as conn:
+        pending_standard = None
+        if confirm_type and confirm_days:
+            # A retroactive change waits for a second click, and the page shows the size of
+            # the rewrite it would cause before anybody makes it.
+            pending_standard = {
+                "permit_type_code": confirm_type,
+                "current": _current_standard(conn, confirm_type),
+                "proposed": confirm_days,
+                "impact": _standard_impact(conn, confirm_type, confirm_days),
+            }
+
         context = {
             "actor": actor,
             "may_edit": actor.role == Role.SUPERVISOR,
             "disciplines": _discipline_rows(conn),
             "permit_types": _permit_types(conn),
             "reviewers": _reviewers(conn),
+            "policies": _phase_allowances(conn),
+            "pending_standard": pending_standard,
             "saved": saved,
             "error": error,
         }
@@ -923,3 +942,223 @@ def add_discipline(
         )
 
     return RedirectResponse(url="/ui/admin?saved=" + quote(code), status_code=303)
+
+
+def _phase_allowances(conn) -> list[dict]:
+    """Every SLA policy row, with the council standard it has to add up to.
+
+    The phases sum to the standard on purpose: 3 plus 14 plus 3 is the 20 day residential
+    commitment. Showing the sum next to the standard is what makes an edit that breaks the
+    arithmetic visible at the moment it is made.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.id, p.permit_type_code, pt.name AS permit_type_name,
+                   pt.council_standard_days, p.phase, p.discipline_code,
+                   p.allowance_days, p.warning_threshold,
+                   sum(p.allowance_days) FILTER (WHERE p.discipline_code IS NULL)
+                       OVER (PARTITION BY p.permit_type_code) AS base_phase_total
+            FROM sla_policy p
+            JOIN permit_type pt ON pt.code = p.permit_type_code
+            ORDER BY pt.category, p.permit_type_code,
+                     CASE p.phase WHEN 'INTAKE_SCREENING' THEN 0
+                                  WHEN 'REVIEW_TASK' THEN 1 ELSE 2 END,
+                     p.discipline_code NULLS FIRST
+            """
+        )
+        return cur.fetchall()
+
+
+def _standard_impact(conn, permit_type_code: str, proposed: int) -> dict:
+    """What moving the council standard would do to already-published compliance.
+
+    `v_sla_compliance` joins `permit_type` live, so the standard is applied to cases that
+    were decided years ago. Raising it turns past misses into hits with no record that the
+    number moved. The screen cannot make the view stop doing that without denormalising the
+    standard onto every application, so it does the next best thing and shows the size of
+    the rewrite before anybody agrees to it.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT count(*)                                                    AS decided,
+                   count(*) FILTER (WHERE net_business_days <= %(current)s)    AS met_now,
+                   count(*) FILTER (WHERE net_business_days <= %(proposed)s)   AS met_after
+            FROM v_cycle_time
+            WHERE permit_type_code = %(code)s AND decided_at IS NOT NULL
+            """,
+            {"code": permit_type_code, "current": _current_standard(conn, permit_type_code),
+             "proposed": proposed},
+        )
+        row = cur.fetchone()
+
+    decided = row["decided"] or 0
+    return {
+        "decided": decided,
+        "met_now": row["met_now"] or 0,
+        "met_after": row["met_after"] or 0,
+        "moved": (row["met_after"] or 0) - (row["met_now"] or 0),
+        "pct_now": round(100.0 * (row["met_now"] or 0) / decided, 1) if decided else None,
+        "pct_after": round(100.0 * (row["met_after"] or 0) / decided, 1) if decided else None,
+    }
+
+
+def _current_standard(conn, permit_type_code: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT council_standard_days FROM permit_type WHERE code = %s", (permit_type_code,))
+        row = cur.fetchone()
+    return row["council_standard_days"] if row else 0
+
+
+@router.post("/admin/sla")
+def change_allowance(
+    request: Request,
+    policy_id: UUID = Form(...),
+    allowance_days: int = Form(...),
+):
+    """Change a phase allowance.
+
+    Open tasks keep the allowance they opened with. `review_task.allowance_days` is written
+    when the task is created and the SLA view reads it from the row, so a supervisor cannot
+    make a reviewer late, or on time, by editing configuration underneath them. New tasks
+    take the new number.
+    """
+    try:
+        actor = current_actor(request)
+    except NotSignedIn:
+        return to_picker(request)
+    require_supervisor(actor)
+
+    if not 1 <= allowance_days <= 365:
+        return RedirectResponse(
+            url="/ui/admin?error=" + quote("An allowance has to be between 1 and 365 days."),
+            status_code=303,
+        )
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT p.permit_type_code, p.phase, p.discipline_code, p.allowance_days
+                   FROM sla_policy p WHERE p.id = %s""",
+                (str(policy_id),),
+            )
+            before = cur.fetchone()
+            if before is None:
+                raise HTTPException(status_code=404, detail="no such policy")
+
+            cur.execute(
+                "UPDATE sla_policy SET allowance_days = %s WHERE id = %s",
+                (allowance_days, str(policy_id)),
+            )
+
+            cur.execute(
+                """SELECT count(*) AS n FROM review_task
+                   WHERE status IN ('PENDING','ASSIGNED','IN_PROGRESS')
+                     AND application_id IN (SELECT id FROM application WHERE permit_type_code = %s)""",
+                (before["permit_type_code"],),
+            )
+            unaffected = cur.fetchone()["n"]
+
+        audit.record(
+            conn,
+            entity_type="configuration",
+            entity_id=None,
+            action="change:sla_allowance",
+            actor=actor.username,
+            before={
+                "permit_type_code": before["permit_type_code"],
+                "phase": before["phase"],
+                "discipline_code": before["discipline_code"],
+                "allowance_days": before["allowance_days"],
+            },
+            after={"allowance_days": allowance_days, "open_tasks_left_alone": unaffected},
+        )
+
+    return RedirectResponse(
+        url="/ui/admin?saved=" + quote(
+            f"{before['permit_type_code']} {before['phase']} allowance is now {allowance_days} days. "
+            f"{unaffected} open task(s) keep the allowance they opened with."
+        ),
+        status_code=303,
+    )
+
+
+@router.post("/admin/council-standard")
+def change_council_standard(
+    request: Request,
+    permit_type_code: str = Form(...),
+    council_standard_days: int = Form(...),
+    confirm: str = Form(""),
+):
+    """Change the council standard a permit type is measured against.
+
+    Unlike a phase allowance, this is retroactive. The compliance view applies the current
+    standard to every case ever decided, so moving it rewrites what the department has
+    already reported. The change is allowed, because the standard genuinely does change when
+    a council votes, but it needs an explicit confirmation and the audit row carries the
+    compliance figure before and after so the movement is attributable later.
+    """
+    try:
+        actor = current_actor(request)
+    except NotSignedIn:
+        return to_picker(request)
+    require_supervisor(actor)
+
+    if not 1 <= council_standard_days <= 365:
+        return RedirectResponse(
+            url="/ui/admin?error=" + quote("A council standard has to be between 1 and 365 days."),
+            status_code=303,
+        )
+
+    with transaction() as conn:
+        current = _current_standard(conn, permit_type_code)
+        if current == council_standard_days:
+            return RedirectResponse(
+                url="/ui/admin?error=" + quote(f"{permit_type_code} is already {current} days."),
+                status_code=303,
+            )
+
+        impact = _standard_impact(conn, permit_type_code, council_standard_days)
+
+        if confirm != "yes" and impact["moved"]:
+            return RedirectResponse(
+                url=(
+                    f"/ui/admin?confirm_type={quote(permit_type_code)}"
+                    f"&confirm_days={council_standard_days}"
+                ),
+                status_code=303,
+            )
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE permit_type SET council_standard_days = %s WHERE code = %s",
+                (council_standard_days, permit_type_code),
+            )
+
+        audit.record(
+            conn,
+            entity_type="configuration",
+            entity_id=None,
+            action="change:council_standard",
+            actor=actor.username,
+            before={
+                "permit_type_code": permit_type_code,
+                "council_standard_days": current,
+                "reported_compliance_pct": impact["pct_now"],
+            },
+            after={
+                "council_standard_days": council_standard_days,
+                "reported_compliance_pct": impact["pct_after"],
+                "decided_cases_reclassified": impact["moved"],
+            },
+        )
+
+    return RedirectResponse(
+        url="/ui/admin?saved=" + quote(
+            f"{permit_type_code} standard is now {council_standard_days} days. "
+            f"{abs(impact['moved'])} already-decided case(s) changed side, and reported "
+            f"compliance moved from {impact['pct_now']}% to {impact['pct_after']}%."
+        ),
+        status_code=303,
+    )
