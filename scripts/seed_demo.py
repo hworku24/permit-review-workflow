@@ -10,8 +10,9 @@ The five cases are driven through the engine like everything else, so each one i
 state because the rules put it there. Parking a case by writing a status column directly
 would produce a case detail page whose timeline disagrees with its status.
 
-Parcel APNs for these five start at 90, and the generated history only ever uses 10 to 39,
-so the two sets cannot collide.
+The five use APNs the county mock actually holds, so intake makes a real SOAP call and the
+address and zoning come back from the county. The generated history uses made up APNs, which
+the county correctly reports as not on record.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from permitflow.db import get_pool, transaction
 from permitflow.demo import reset_case_data
 from permitflow.integrations.base import ResiliencePolicy
 from permitflow.integrations.licensing import LicensingClient, verify_and_record
+from permitflow.integrations.property_records import enrich_parcel
 from permitflow.process import escalation
 from permitflow.process.engine import Actor, Engine
 from permitflow.process.states import Role
@@ -55,7 +57,9 @@ def _at(today: date, days_back: int, *, hour: int) -> datetime:
     return datetime.combine(today - timedelta(days=days_back), time(hour=hour), DEPARTMENT_TZ)
 
 
-def _run_triage(conn, application_id: UUID, *, decision: str, actor: str = "mcarrero") -> None:
+def _run_triage(
+    conn, application_id: UUID, *, decision: str, at: datetime, actor: str = "mcarrero"
+) -> None:
     """Draft the intake fields and routing, then leave the row in the state asked for.
 
     Same calls the API route makes. `decision` is "pending", "accepted", or "overridden",
@@ -75,6 +79,7 @@ def _run_triage(conn, application_id: UUID, *, decision: str, actor: str = "mcar
         payload=extraction.as_payload(),
         model=extraction.model,
         prompt_version=extraction.prompt_version,
+        occurred_at=at,
         confidence=(
             round(sum(s.confidence for s in extraction.accepted.values()) / len(extraction.accepted), 3)
             if extraction.accepted
@@ -88,10 +93,11 @@ def _run_triage(conn, application_id: UUID, *, decision: str, actor: str = "mcar
         payload=routing.as_payload(),
         model=routing.model,
         prompt_version=routing.prompt_version,
+        occurred_at=at,
     )
 
     if decision == "accepted":
-        recording.decide(conn, extraction_id, actor=actor, accepted=True)
+        recording.decide(conn, extraction_id, actor=actor, accepted=True, occurred_at=at)
     elif decision == "overridden":
         # The clerk keeps the extraction but corrects one field. Recording the corrected
         # value next to the original is what makes the override reviewable later.
@@ -100,11 +106,19 @@ def _run_triage(conn, application_id: UUID, *, decision: str, actor: str = "mcar
             "field": "declared_valuation",
             "reason": "figure on the submitted cost affidavit differs from the narrative",
         }
-        recording.decide(conn, extraction_id, actor=actor, accepted=False, override_payload=corrected)
+        recording.decide(
+            conn, extraction_id, actor=actor, accepted=False,
+            override_payload=corrected, occurred_at=at,
+        )
 
 
-def _parties(conn, *, slot: int, name: str, business: str, license_number: str) -> dict:
-    """One applicant, parcel, and contractor for a demo case."""
+def _parties(conn, *, slot: int, name: str, business: str, license_number: str, apn: str) -> dict:
+    """One applicant, parcel, and contractor for a demo case.
+
+    The APN is one the county mock actually holds, so intake makes a real SOAP call and
+    the address and zoning on the page come back from the county rather than from here.
+    The placeholder values below are what an applicant types; the county overwrites them.
+    """
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO applicant (full_name, email) VALUES (%s, %s) RETURNING id",
@@ -115,7 +129,7 @@ def _parties(conn, *, slot: int, name: str, business: str, license_number: str) 
         cur.execute(
             """INSERT INTO parcel (apn, situs_address, zoning_code)
                VALUES (%s, %s, %s) RETURNING id""",
-            (f"90-{slot:03d}-{slot:03d}", f"{100 + slot} Copperline Blvd", "R-90"),
+            (apn, f"{100 + slot} pending county lookup", "R-90"),
         )
         parcel_id = cur.fetchone()["id"]
 
@@ -138,7 +152,11 @@ def _parties(conn, *, slot: int, name: str, business: str, license_number: str) 
 
 
 def _start(conn, clock, parties: dict, *, permit_type: str, narrative: str, value: int) -> UUID:
-    """Create, submit, and enrich. Every demo case passes through here."""
+    """Create, submit, look the parcel up at the county, and enrich.
+
+    Same order the API route uses. The county call happens before enrichment completes so
+    a failure degrades the case to unverified without stopping intake, which is NFR-02.
+    """
     engine = Engine(conn, clock=clock)
     application_id = engine.create_application(
         applicant_id=parties["applicant_id"],
@@ -152,6 +170,12 @@ def _start(conn, clock, parties: dict, *, permit_type: str, narrative: str, valu
     )
     engine.submit(application_id, parties["applicant"])
     clock.advance_business_days(1, random.Random(1))
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT apn FROM parcel WHERE id = %s", (str(parties["parcel_id"]),))
+        apn = cur.fetchone()["apn"]
+    enrich_parcel(conn, parties["parcel_id"], apn, application_id=application_id)
+
     engine.complete_enrichment(application_id)
     return application_id
 
@@ -176,7 +200,7 @@ def golden_path(conn, rng, today: date) -> tuple[str, str]:
     """Submitted, screened, reviewed clean, issued."""
     clock = seed_cases.Clock(_at(today, RECENT_DAYS_BACK, hour=9))
     parties = _parties(
-        conn, slot=1, name="Priya Venkataraman", business="Harlowe Building Group LLC",
+        conn, slot=1, apn="14-220-118", name="Priya Venkataraman", business="Harlowe Building Group LLC",
         license_number="VA-CL-004182",
     )
     application_id = _start(
@@ -196,7 +220,7 @@ def golden_path(conn, rng, today: date) -> tuple[str, str]:
         conn, parties["contractor_id"], "VA-CL-004182", application_id=application_id
     )
 
-    _run_triage(conn, application_id, decision="accepted")
+    _run_triage(conn, application_id, decision="accepted", at=clock.now)
     _receive_documents(conn, application_id, clock, parties["applicant"].username)
     clock.advance_business_days(1, rng)
     engine.accept_intake(application_id, CLERK)
@@ -216,7 +240,7 @@ def awaiting_review(conn, rng, today: date) -> tuple[str, str]:
     """Intake accepted, four tasks open, nobody has started one."""
     clock = seed_cases.Clock(_at(today, RECENT_DAYS_BACK, hour=10))
     parties = _parties(
-        conn, slot=2, name="Marcus Okafor", business="Southgate Commercial Builders",
+        conn, slot=2, apn="22-408-001", name="Marcus Okafor", business="Southgate Commercial Builders",
         license_number="VA-CL-013006",
     )
     application_id = _start(
@@ -237,7 +261,7 @@ def awaiting_review(conn, rng, today: date) -> tuple[str, str]:
     # Environmental is confirmed at screening because the narrative mentions stormwater.
     # Four disciplines open at once, which is the point of the queue screen.
     engine.accept_intake(application_id, CLERK, confirmed_additional_disciplines=["ENVIRONMENTAL"])
-    _run_triage(conn, application_id, decision="pending")
+    _run_triage(conn, application_id, decision="pending", at=clock.now)
     return _number(conn, application_id), "under review, four tasks open, none started"
 
 
@@ -245,7 +269,7 @@ def paused_on_applicant(conn, rng, today: date) -> tuple[str, str]:
     """Returned incomplete. Sitting with the applicant and the SLA clock stopped."""
     clock = seed_cases.Clock(_at(today, RECENT_DAYS_BACK, hour=11))
     parties = _parties(
-        conn, slot=3, name="Dana Whitfield", business="Delmar Renovations Inc",
+        conn, slot=3, apn="31-077-220", name="Dana Whitfield", business="Delmar Renovations Inc",
         license_number="VA-CL-011290",
     )
     application_id = _start(
@@ -270,7 +294,7 @@ def escalated(conn, rng, today: date) -> tuple[str, str]:
     """Opened months ago and never finished, so the sweep finds it past its allowance."""
     clock = seed_cases.Clock(_at(today, STALE_DAYS_BACK, hour=9))
     parties = _parties(
-        conn, slot=4, name="Glen Sutton-Reyes", business="Foxglove Design Build",
+        conn, slot=4, apn="18-330-045", name="Glen Sutton-Reyes", business="Foxglove Design Build",
         license_number="VA-CL-025637",
     )
     application_id = _start(
@@ -305,7 +329,7 @@ def unverified_licence(conn, rng, today: date) -> tuple[str, str]:
     """
     clock = seed_cases.Clock(_at(today, RECENT_DAYS_BACK, hour=14))
     parties = _parties(
-        conn, slot=5, name="Nadia Malik", business="Pinecrest Construction Co",
+        conn, slot=5, apn="09-114-007", name="Nadia Malik", business="Pinecrest Construction Co",
         license_number="VA-CL-007733",
     )
     application_id = _start(
@@ -327,7 +351,7 @@ def unverified_licence(conn, rng, today: date) -> tuple[str, str]:
         client=dead,
         application_id=application_id,
     )
-    _run_triage(conn, application_id, decision="overridden")
+    _run_triage(conn, application_id, decision="overridden", at=clock.now)
     return _number(conn, application_id), f"licence {status}, intake effect {effect}"
 
 

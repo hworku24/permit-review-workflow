@@ -183,6 +183,20 @@ def run_checks(conn) -> None:
     check("integrations", "a failed call is logged", outcomes.get("ERROR", 0) > 0,
           f"{outcomes.get('ERROR', 0)} error")
 
+    systems = {r["system"] for r in rows(conn, "SELECT DISTINCT system FROM integration_call")}
+    check("integrations", "the county SOAP service was called", "PROPERTY_RECORDS" in systems,
+          ", ".join(sorted(systems)) or "none")
+    check("integrations", "the licensing replica was called", "BUSINESS_LICENSING" in systems)
+
+    enriched = one(
+        conn,
+        """SELECT count(*) AS n FROM parcel p
+           JOIN application a ON a.parcel_id = p.id
+           WHERE a.parcel_verified AND p.owner_name IS NOT NULL""",
+    )
+    check("integrations", "parcel data came back from the county", enriched > 0,
+          f"{enriched} enriched")
+
     unverified = one(conn, "SELECT count(*) AS n FROM contractor WHERE license_status='UNVERIFIED'")
     check("integrations", "an unverified licence exists", unverified > 0, f"{unverified} unverified")
 

@@ -187,6 +187,7 @@ class Engine:
             actor=actor.username,
             before={"status": current.value},
             after={"status": target.value, "reason": reason},
+            occurred_at=moment,
         )
 
         application["status"] = target.value
@@ -281,6 +282,7 @@ class Engine:
             action="create",
             actor=actor.username,
             after={"application_number": number, "permit_type_code": permit_type_code},
+            occurred_at=self._now(),
         )
         return application_id
 
@@ -484,6 +486,7 @@ class Engine:
             action="open",
             actor=actor.username,
             after={"discipline_code": discipline_code, "round": round_number},
+            occurred_at=self._now(),
         )
 
         chosen = self._preferred_if_eligible(discipline_code, preferred_reviewer_id)
@@ -691,6 +694,7 @@ class Engine:
             actor=actor.username,
             before={"status": current.value},
             after={"status": target.value, "reason": reason},
+            occurred_at=self._now(),
         )
         task["status"] = target.value
         return target

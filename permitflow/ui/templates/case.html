@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+{% block title %}{{ case.application_number }}{% endblock %}
+
+{% macro ts(value) %}{{ value.strftime('%d %b %Y %H:%M') if value else 'not set' }}{% endmacro %}
+
+{% block content %}
+<p class="crumb"><a href="/ui/queue">My queue</a></p>
+
+<div class="panel">
+  <div class="case-head">
+    <div>
+      <h1>{{ case.application_number }}</h1>
+      <p class="summary">{{ case.permit_type_name }} at {{ case.situs_address }}</p>
+    </div>
+    <div class="case-status">
+      <span class="pill status">{{ case.status }}</span>
+      <div class="waiting">waiting on {{ case.waiting_on }}</div>
+    </div>
+  </div>
+
+  <div class="facts">
+    <div><dt>Applicant</dt><dd>{{ case.applicant_name }}<br><span class="muted">{{ case.applicant_email }}</span></dd></div>
+    <div>
+      <dt>Contractor</dt>
+      <dd>
+        {{ case.contractor_name or 'none on file' }}
+        {% if case.contractor_name %}
+          <br>
+          <span class="pill {{ 'sla-breached' if case.license_status != 'ACTIVE' else 'sla-on-track' }}">
+            licence {{ case.license_status }}
+          </span>
+        {% endif %}
+      </dd>
+    </div>
+    <div><dt>Parcel</dt><dd>{{ case.apn }}<br><span class="muted">{{ case.zoning_code }}</span></dd></div>
+    <div><dt>Declared value</dt><dd>${{ '{:,.0f}'.format(case.declared_valuation) }}</dd></div>
+    <div><dt>Square feet</dt><dd>{{ '{:,}'.format(case.square_feet) if case.square_feet else 'not stated' }}</dd></div>
+    <div><dt>Submitted</dt><dd>{{ ts(case.submitted_at) }}</dd></div>
+    <div><dt>Intake accepted</dt><dd>{{ ts(case.intake_completed_at) }}</dd></div>
+    <div><dt>Decided</dt><dd>{{ ts(case.decided_at) }}</dd></div>
+    <div>
+      <dt>County parcel lookup</dt>
+      <dd>{{ 'verified' if case.parcel_verified else 'not verified' }}</dd>
+    </div>
+    <div>
+      <dt>Licence check</dt>
+      <dd>{{ 'verified' if case.license_verified else 'not verified' }}</dd>
+    </div>
+  </div>
+</div>
+
+{% if sla %}
+<div class="panel">
+  <h2>Clock</h2>
+  {% set label, css = labels.get(sla.sla_state, (sla.sla_state, '')) %}
+  <div class="facts">
+    <div><dt>Council standard</dt><dd>{{ sla.allowance_days }} business days</dd></div>
+    <div><dt>Net elapsed</dt><dd>{{ sla.net_business_days_elapsed }} business days</dd></div>
+    <div><dt>Remaining</dt><dd>{{ sla.days_remaining }}</dd></div>
+    <div><dt>State</dt><dd><span class="pill {{ css }}">{{ sla.sla_state }}</span></dd></div>
+  </div>
+  {% if sla.clock_paused %}
+    <p class="banner">
+      The clock is stopped. This case is sitting with the applicant, and the wait does not
+      count against the department's cycle time.
+    </p>
+  {% else %}
+    <p class="note">
+      Net elapsed excludes time the case spent with the applicant. Gross minus applicant
+      wait equals net.
+    </p>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Documents</h2>
+  {% if not documents %}
+    <p class="note">No document requirements on this permit type.</p>
+  {% else %}
+  <table class="grid">
+    <thead>
+      <tr><th>Document</th><th>Status</th><th>File</th><th>Received</th><th>From</th></tr>
+    </thead>
+    <tbody>
+      {% for doc in documents %}
+      <tr>
+        <td>{{ doc.document_name or doc.document_type_code }}</td>
+        <td>
+          <span class="pill {{ 'sla-breached' if doc.status == 'MISSING' else 'sla-on-track' }}">
+            {{ doc.status }}
+          </span>
+        </td>
+        <td>{{ doc.filename or 'none' }}</td>
+        <td>{{ ts(doc.uploaded_at) }}</td>
+        <td>
+          {{ doc.uploaded_by or 'nobody' }}
+          {% if doc.waived_by %}<br><span class="muted">waived by {{ doc.waived_by }}: {{ doc.waiver_reason }}</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Reviews</h2>
+  {% if not tasks %}
+    <p class="note">Intake has not been accepted, so no discipline reviews are open yet.</p>
+  {% else %}
+    <p class="note">
+      Newest round first. Earlier rounds stay on the page, because what a reviewer said the
+      first time is most of what a case history is for.
+    </p>
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Discipline</th><th class="num">Round</th><th>Status</th><th>Reviewer</th>
+          <th>Assigned</th><th class="num">Days open</th><th class="num">Allowed</th><th>SLA</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for task in tasks %}
+        {% set label, css = labels.get(task.sla_state, (task.sla_state, '')) %}
+        <tr>
+          <td>{{ task.discipline_code }}</td>
+          <td class="num">{{ task.round }}</td>
+          <td>{{ task.status }}</td>
+          <td>{{ task.reviewer_name or 'unassigned' }}</td>
+          <td>{{ ts(task.assigned_at) }}</td>
+          <td class="num">{{ task.business_days_open if task.business_days_open is not none else 'not started' }}</td>
+          <td class="num">{{ task.allowance_days }}</td>
+          <td><span class="pill {{ css }}">{{ label }}</span></td>
+        </tr>
+        {% if task.deficiencies or task.conditions %}
+        <tr class="nested">
+          <td colspan="8">
+            {% for d in task.deficiencies %}
+            <div class="finding">
+              <span class="pill {{ 'sla-breached' if d.severity == 'MAJOR' else 'sla-at-risk' }}">{{ d.severity }}</span>
+              <code>{{ d.code_reference }}</code>
+              {{ d.description }}
+              <span class="muted">
+                raised by {{ d.created_by }}{% if d.resolved_at %}, resolved in round {{ d.resolved_in_round }}{% else %}, open{% endif %}
+              </span>
+            </div>
+            {% endfor %}
+            {% for c in task.conditions %}
+            <div class="finding">
+              <span class="pill sla-on-track">CONDITION</span>
+              {{ c.description }}
+              <span class="muted">set by {{ c.created_by }}</span>
+            </div>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
+{% if recommendations %}
+<div class="panel">
+  <h2>AI recommendations</h2>
+  <table class="grid">
+    <thead>
+      <tr><th>Kind</th><th>Model</th><th>Prompt</th><th class="num">Confidence</th><th>Decision</th><th>Decided by</th></tr>
+    </thead>
+    <tbody>
+      {% for rec in recommendations %}
+      <tr>
+        <td>{{ rec.kind }}</td>
+        <td><code>{{ rec.model }}</code></td>
+        <td><code>{{ rec.prompt_version }}</code></td>
+        <td class="num">{{ '%.2f'|format(rec.confidence) if rec.confidence is not none else 'not scored' }}</td>
+        <td>
+          {% if rec.accepted is none %}<span class="pill sla-unassigned">pending</span>
+          {% elif rec.accepted %}<span class="pill sla-on-track">accepted</span>
+          {% else %}<span class="pill sla-at-risk">overridden</span>{% endif %}
+        </td>
+        <td>{{ rec.decided_by or 'nobody yet' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="note">
+    Nothing here moved this case. A recommendation is applied when a named person accepts
+    it, and the decision is recorded on the same row.
+  </p>
+</div>
+{% endif %}
+
+{% if integrations %}
+<div class="panel">
+  <h2>External lookups</h2>
+  <table class="grid">
+    <thead>
+      <tr><th>System</th><th>Operation</th><th class="num">Attempt</th><th>Result</th><th class="num">Latency</th><th>When</th></tr>
+    </thead>
+    <tbody>
+      {% for call in integrations %}
+      <tr>
+        <td>{{ call.system }}</td>
+        <td><code>{{ call.operation }}</code></td>
+        <td class="num">{{ call.attempt }}</td>
+        <td>
+          <span class="pill {{ 'sla-on-track' if call.status == 'SUCCESS' else 'sla-breached' }}">{{ call.status }}</span>
+          {% if call.error_detail %}<br><span class="muted">{{ call.error_detail[:120] }}</span>{% endif %}
+        </td>
+        <td class="num">{{ call.latency_ms ~ ' ms' if call.latency_ms is not none else 'not recorded' }}</td>
+        <td>{{ ts(call.attempted_at) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Timeline</h2>
+  <ol class="timeline">
+    {% for event in timeline %}
+    <li class="event {{ event.kind }}">
+      <span class="when">{{ ts(event.at) }}</span>
+      <span class="what">{{ event.headline }}</span>
+      <span class="who">{{ event.actor }}</span>
+      {% if event.detail %}<div class="detail">{{ event.detail }}</div>{% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+</div>
+
+<div class="panel">
+  <h2>Audit trail</h2>
+  <p class="note">
+    {{ audit|length }} entries for this case and everything hanging off it. The table is
+    append-only in the database, so these rows cannot be edited or deleted by the
+    application at all.
+  </p>
+  <table class="grid">
+    <thead>
+      <tr><th>When</th><th>Entity</th><th>Action</th><th>Actor</th></tr>
+    </thead>
+    <tbody>
+      {% for row in audit %}
+      <tr>
+        <td class="nowrap">{{ ts(row.occurred_at) }}</td>
+        <td>{{ row.entity_type }}</td>
+        <td><code>{{ row.action }}</code></td>
+        <td>{{ row.actor }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

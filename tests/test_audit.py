@@ -6,6 +6,8 @@ reconstruct who changed the zoning determination or when.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import psycopg
 import pytest
 
@@ -132,3 +134,49 @@ class TestTransitionAuditing:
         rows = audit.history(conn, "review_task", task["id"])
         assert any(r["actor"] == actor.username for r in rows)
         assert all(r["occurred_at"] is not None for r in rows)
+
+
+class TestAuditTimestampsFollowTheEngineClock:
+    """FR-20: an audit row records when the action happened, not when the row was written.
+
+    The two are the same in production and differ in any seeded or backfilled history. A
+    trail that disagrees with the status history it describes is the one defect an audit
+    trail cannot have, since reconstructing a sequence is the whole reason it exists.
+    """
+
+    def test_a_transition_is_stamped_with_the_clock_that_moved_it(
+        self, conn, make_application, clock
+    ) -> None:
+        clock.now = datetime(2026, 3, 2, 9, 0, tzinfo=UTC)
+        engine = Engine(conn, clock=clock)
+        application_id = make_application()
+        engine.submit(application_id, APPLICANT)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT occurred_at FROM audit_log
+                   WHERE entity_id = %s AND action = 'transition:submit'""",
+                (str(application_id),),
+            )
+            audited = cur.fetchone()["occurred_at"]
+
+        assert audited == clock.now
+
+    def test_the_audit_row_and_the_status_row_agree(self, conn, make_application, clock) -> None:
+        clock.now = datetime(2026, 3, 2, 9, 0, tzinfo=UTC)
+        engine = Engine(conn, clock=clock)
+        application_id = make_application()
+        engine.submit(application_id, APPLICANT)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT sh.occurred_at AS status_at, al.occurred_at AS audit_at
+                   FROM status_history sh
+                   JOIN audit_log al ON al.entity_id = sh.application_id
+                                    AND al.action = 'transition:' || 'submit'
+                   WHERE sh.application_id = %s AND sh.to_status = 'SUBMITTED'""",
+                (str(application_id),),
+            )
+            row = cur.fetchone()
+
+        assert row["status_at"] == row["audit_at"]

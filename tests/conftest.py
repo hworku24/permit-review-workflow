@@ -355,6 +355,73 @@ def application_under_review(committed_parties: dict[str, UUID]) -> dict:
 
 
 @pytest.fixture
+def returned_incomplete(committed_parties: dict[str, UUID]) -> dict:
+    """Committed and sitting with the applicant, so the clock is paused."""
+    clock = FrozenClock(datetime.now(UTC) - timedelta(days=3))
+    with transaction() as conn:
+        engine = Engine(conn, clock=clock)
+        application_id = engine.create_application(
+            applicant_id=committed_parties["applicant_id"],
+            parcel_id=committed_parties["parcel_id"],
+            contractor_id=committed_parties["contractor_id"],
+            permit_type_code="BLD-RES-ALT",
+            scope_narrative="Rear addition, 640 sq ft. Value $180,000.",
+            declared_valuation=Decimal("180000"),
+            actor=APPLICANT,
+        )
+        engine.submit(application_id, APPLICANT)
+        engine.complete_enrichment(application_id)
+        engine.return_incomplete(application_id, CLERK, ["site plan not drawn to scale"])
+    return {"application_id": application_id}
+
+
+@pytest.fixture
+def resubmitted_after_deficiency(committed_parties: dict[str, UUID]) -> dict:
+    """Committed, round 1 found something, the applicant resubmitted, round 2 is open.
+
+    The case a single-round design cannot represent, and the reason review tasks are rows.
+    """
+    code = "IRC R502.3.1"
+    case = _commit_under_review(committed_parties, datetime.now(UTC) - timedelta(days=20))
+
+    with transaction() as conn:
+        engine = Engine(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT rt.id, rt.discipline_code, rt.reviewer_id, r.username
+                   FROM review_task rt
+                   JOIN reviewer r ON r.id = rt.reviewer_id
+                   WHERE rt.application_id = %s
+                     AND rt.status IN ('PENDING','ASSIGNED','IN_PROGRESS')
+                   ORDER BY rt.discipline_code""",
+                (str(case["application_id"]),),
+            )
+            tasks = cur.fetchall()
+
+        # Every discipline has to report before the round closes, so the others approve.
+        # One deficiency is enough to send the round back.
+        for task in tasks:
+            actor = reviewer_actor(task)
+            engine.start_task(task["id"], actor)
+            if task["discipline_code"] == case["discipline_code"]:
+                engine.record_deficiencies(
+                    task["id"],
+                    actor,
+                    [{
+                        "code_reference": code,
+                        "description": "Floor joist span exceeds the allowable table value",
+                        "severity": "MAJOR",
+                    }],
+                )
+            else:
+                engine.approve_task(task["id"], actor)
+
+        engine.resubmit(case["application_id"], APPLICANT)
+
+    return {**case, "deficiency_code": code}
+
+
+@pytest.fixture
 def overdue_task(committed_parties: dict[str, UUID]) -> dict:
     """Committed and old enough that the SLA view calls its tasks BREACHED.
 

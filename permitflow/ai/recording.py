@@ -12,6 +12,7 @@ make the audit trail lie about who chose what.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -31,14 +32,16 @@ def record(
     prompt_version: str,
     confidence: float | None = None,
     sources: list[dict[str, Any]] | None = None,
+    occurred_at: datetime | None = None,
 ) -> UUID:
     """Store a recommendation awaiting a human decision."""
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO ai_recommendation (
-                application_id, kind, model, prompt_version, payload, confidence, sources
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                application_id, kind, model, prompt_version, payload, confidence, sources,
+                created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, now()))
             RETURNING id
             """,
             (
@@ -49,6 +52,7 @@ def record(
                 Jsonb(payload),
                 confidence,
                 Jsonb(sources) if sources is not None else None,
+                occurred_at,
             ),
         )
         recommendation_id = cur.fetchone()["id"]
@@ -60,6 +64,7 @@ def record(
         action=f"recommend:{kind}",
         actor="system",
         after={"model": model, "prompt_version": prompt_version, "payload": payload},
+        occurred_at=occurred_at,
     )
     return recommendation_id
 
@@ -71,6 +76,7 @@ def decide(
     actor: str,
     accepted: bool,
     override_payload: dict[str, Any] | None = None,
+    occurred_at: datetime | None = None,
 ) -> None:
     """Record a human accepting or overriding a recommendation (AI-04, AI-07).
 
@@ -85,7 +91,7 @@ def decide(
             SET accepted = %s,
                 override_payload = %s,
                 decided_by = %s,
-                decided_at = now()
+                decided_at = COALESCE(%s, now())
             WHERE id = %s AND accepted IS NULL
             RETURNING kind, payload
             """,
@@ -93,6 +99,7 @@ def decide(
                 accepted,
                 Jsonb(override_payload) if override_payload is not None else None,
                 actor,
+                occurred_at,
                 str(recommendation_id),
             ),
         )
@@ -109,6 +116,7 @@ def decide(
         actor=actor,
         before={"suggested": row["payload"]},
         after={"accepted": accepted, "override": override_payload},
+        occurred_at=occurred_at,
     )
 
 

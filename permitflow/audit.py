@@ -12,6 +12,7 @@ determination or when.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -28,17 +29,26 @@ def record(
     actor: str,
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
+    occurred_at: datetime | None = None,
 ) -> None:
     """Append one audit row.
 
     Called inside the caller's transaction on purpose. An audit row that commits while
     the change it describes rolls back would be worse than no audit row at all.
+
+    `occurred_at` takes the caller's clock. The engine passes its own, the same one that
+    stamps `status_history`, so the audit trail and the timeline agree about when a thing
+    happened. Falling back to the column default is how a case seeded with a clock in the
+    past ends up with a timeline reading July and an audit trail reading today, which is
+    the one defect an audit trail cannot have.
     """
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO audit_log (entity_type, entity_id, action, actor, before_value, after_value)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO audit_log (
+                entity_type, entity_id, action, actor, before_value, after_value, occurred_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, now()))
             """,
             (
                 entity_type,
@@ -47,6 +57,7 @@ def record(
                 actor,
                 Jsonb(before) if before is not None else None,
                 Jsonb(after) if after is not None else None,
+                occurred_at,
             ),
         )
 
