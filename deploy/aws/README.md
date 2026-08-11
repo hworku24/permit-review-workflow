@@ -8,12 +8,12 @@ CloudFront in front of it for HTTPS, and a small managed Postgres.
 | Piece | Roughly |
 |---|---|
 | Application load balancer | $16 / month |
-| Fargate, 0.25 vCPU and 0.5 GB, one task | $9 / month |
+| Fargate, 0.5 vCPU and 1 GB, one task | $18 / month |
 | RDS `db.t4g.micro`, 20 GB gp3 | $13 / month |
 | CloudFront | free at this volume |
 | ECR, Secrets Manager, CloudWatch Logs | under $1 / month |
 
-About **$38 a month** while it is up, and nothing when it is torn down. `teardown.sh`
+About **$47 a month** while it is up, and nothing when it is torn down. `teardown.sh`
 removes everything that bills.
 
 ## The shape of it
@@ -27,7 +27,7 @@ removes everything that bills.
     application load balancer
            |  HTTP 8000, from the ALB security group only
      Fargate task
-       api + soap-mock containers
+       api + soap-mock + licensing-verifier
            |  5432, from the task security group only
         RDS PostgreSQL
           not publicly accessible
@@ -44,6 +44,19 @@ without a domain name somebody owns. CloudFront supplies a working certificate o
 domain, which is the cheapest honest way to get HTTPS without buying a domain. The ALB then
 only accepts traffic from CloudFront, so the plain HTTP origin is not a way around the front
 door.
+
+## Three containers in one task
+
+`api` serves the screens and the API. `soap-mock` stands in for the county. `licensing-verifier`
+is the Spring service that owns the JDBC connection to the licensing replica.
+
+They share a network namespace, so `api` reaches the verifier on `localhost:8082` and nothing
+outside the task can reach it at all. The verifier is the only container holding the replica
+credential, which is the arrangement the split exists for: the credential the state issues
+belongs to one service and not to every application that wants an answer.
+
+The task went from 0.25 vCPU to 0.5 and from 0.5 GB to 1 GB when the JVM joined, which is
+most of the difference in the monthly figure above.
 
 ## The sign-in
 

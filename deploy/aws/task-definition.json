@@ -4,8 +4,8 @@
   "requiresCompatibilities": [
     "FARGATE"
   ],
-  "cpu": "256",
-  "memory": "512",
+  "cpu": "512",
+  "memory": "1024",
   "executionRoleArn": "arn:aws:iam::559037158320:role/permitflowTaskExecution",
   "runtimePlatform": {
     "cpuArchitecture": "X86_64",
@@ -30,6 +30,14 @@
         {
           "name": "PROPERTY_RECORDS_WSDL",
           "value": "http://localhost:8081/property-records?wsdl"
+        },
+        {
+          "name": "LICENSING_BACKEND",
+          "value": "http"
+        },
+        {
+          "name": "LICENSING_SERVICE_URL",
+          "value": "http://localhost:8082"
         }
       ],
       "secrets": [
@@ -83,6 +91,41 @@
           "awslogs-group": "/ecs/permitflow",
           "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "soap"
+        }
+      }
+    },
+    {
+      "name": "licensing-verifier",
+      "image": "559037158320.dkr.ecr.us-east-1.amazonaws.com/permitflow-verifier:latest",
+      "essential": false,
+      "portMappings": [
+        {
+          "containerPort": 8082,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "LICENSING_DB_JDBC_URL",
+          "value": "jdbc:postgresql://permitflow-db.c0b80o4k4aka.us-east-1.rds.amazonaws.com:5432/licensing_replica"
+        },
+        {
+          "name": "LICENSING_DB_USER",
+          "value": "permitflow_ro"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "LICENSING_DB_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:559037158320:secret:permitflow/db-password-ac0mp7"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/permitflow",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "verifier"
         }
       }
     }
