@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..errors import (
@@ -105,6 +105,12 @@ def _circuit_open(request: Request, exc: CircuitOpen) -> JSONResponse:
 @app.exception_handler(IntegrationError)
 def _integration_error(request: Request, exc: IntegrationError) -> JSONResponse:
     return JSONResponse(status_code=502, content={"detail": str(exc), "reasons": []})
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """The bare domain is a person, not an integration. Send them to the screens."""
+    return RedirectResponse(url="/ui/")
 
 
 @app.get("/health", tags=["ops"])

@@ -97,3 +97,33 @@ class TestToken:
     def test_rubbish_is_refused(self, gated) -> None:
         for value in (None, "", "no-dot", "abc.def"):
             assert not gate.valid(value)
+
+
+class TestTheBareDomain:
+    """Somebody typing the hostname is asking for a page, not calling an API.
+
+    This was found by opening the deployed URL with no path: the root is not a /ui path, so
+    the gate fell through to the machine-caller branch and answered a browser with plain
+    text and a 401. That is a broken-looking front door on the one address worth sharing.
+    """
+
+    def test_the_root_sends_a_browser_to_the_sign_in(self, api_client, gated) -> None:
+        response = api_client.get("/", headers={"Accept": "text/html"}, follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/ui/gate"
+
+    def test_the_root_lands_on_the_picker_when_the_gate_is_off(self, api_client) -> None:
+        response = api_client.get("/", follow_redirects=False)
+        assert response.status_code == 307
+        assert response.headers["location"] == "/ui/"
+
+    def test_a_machine_caller_still_gets_a_status_code(self, api_client, gated) -> None:
+        """Curl and integrations have nowhere to follow a redirect to."""
+        response = api_client.get("/queues/intake", headers={"Accept": "application/json"})
+        assert response.status_code == 401
+
+    def test_any_page_request_reaches_the_sign_in(self, api_client, gated) -> None:
+        for path in ("/", "/docs", "/reports/sla-compliance"):
+            response = api_client.get(path, headers={"Accept": "text/html"}, follow_redirects=False)
+            assert response.status_code == 303, path
+            assert response.headers["location"] == "/ui/gate", path

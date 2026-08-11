@@ -89,7 +89,13 @@ class GateMiddleware(BaseHTTPMiddleware):
         if valid(request.cookies.get(GATE_COOKIE)):
             return await call_next(request)
 
-        if path.startswith("/ui"):
+        # A browser gets sent to the sign-in page. Deciding on the Accept header and not on
+        # the path is what makes the bare domain work: somebody typing the hostname is asking
+        # for a page, and answering that with a 401 and the words "sign in at /ui/gate" is a
+        # broken-looking front door on the one address worth sharing.
+        wants_page = "text/html" in request.headers.get("accept", "")
+        if path.startswith("/ui") or wants_page:
             return RedirectResponse(url="/ui/gate", status_code=303)
-        # The API is not a browser, so it gets a status code and not a redirect.
+
+        # Anything else is a machine caller, which has nowhere to follow a redirect to.
         return HTMLResponse("sign in at /ui/gate", status_code=401)
