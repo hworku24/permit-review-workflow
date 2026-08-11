@@ -1,8 +1,11 @@
 services:
   # PermitFlow's own database.
+  # No container_name on either service. A fixed name is global to the Docker daemon, so a
+  # container left behind by another checkout of this repo blocks `compose up` here with a
+  # name conflict. Letting compose derive the name from the project keeps two checkouts
+  # independent.
   permitflow-db:
     image: postgres:16
-    container_name: permitflow-db
     environment:
       POSTGRES_DB: permitflow
       POSTGRES_USER: permitflow
@@ -29,7 +32,6 @@ services:
   # a second connection with its own credentials and its own failure mode.
   licensing-db:
     image: postgres:16
-    container_name: permitflow-licensing-db
     environment:
       POSTGRES_DB: licensing_replica
       POSTGRES_USER: dpor_admin

@@ -23,28 +23,10 @@ import pytest
 import uvicorn
 
 from permitflow.db import get_pool, transaction
+from permitflow.demo import CASE_TABLES, reset_case_data  # noqa: F401 - CASE_TABLES re-exported
 from permitflow.process.engine import Actor, Engine
 from permitflow.process.sla import HolidayCalendar
 from permitflow.process.states import Role
-
-# Case data is wiped between tests. Reference data (permit types, disciplines, staff,
-# holidays, SLA policies) is seeded once by docker-entrypoint and left alone.
-CASE_TABLES = [
-    "audit_log",
-    "integration_call",
-    "ai_recommendation",
-    "escalation",
-    "clock_pause",
-    "status_history",
-    "deficiency",
-    "review_condition",
-    "review_task",
-    "application_document",
-    "application",
-    "applicant",
-    "contractor",
-    "parcel",
-]
 
 CLERK = Actor("mcarrero", Role.INTAKE_CLERK)
 SUPERVISOR = Actor("dhollis", Role.SUPERVISOR)
@@ -66,23 +48,13 @@ def _require_database() -> None:
 def clean_case_data() -> Iterator[None]:
     """Wipe case rows before each test.
 
-    Note what this has to do to clear `audit_log`. The append-only triggers reject DELETE
-    and TRUNCATE, so the harness disables them explicitly as the table owner. That is the
-    point rather than a workaround: resetting the audit trail takes a privilege the
-    application role never exercises, which is what FR-21 actually asks for.
+    Shares `reset_case_data` with the demo seeder, so the two cannot drift. An assignment
+    test deactivates every reviewer to prove a task stays PENDING, and the reviewer restore
+    inside that function is what keeps the suite order-independent.
     """
     with get_pool().connection() as conn:
         conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("ALTER TABLE audit_log DISABLE TRIGGER USER")
-            cur.execute(
-                f"TRUNCATE {', '.join(CASE_TABLES)} RESTART IDENTITY CASCADE"
-            )
-            cur.execute("ALTER TABLE audit_log ENABLE TRIGGER USER")
-            # Reference data is not truncated, but tests are allowed to mutate it (an
-            # assignment test deactivates every reviewer to prove a task stays PENDING).
-            # Restoring it here is what keeps the suite order-independent.
-            cur.execute("UPDATE reviewer SET active = (username <> 'tbrandt')")
+        reset_case_data(conn)
     yield
 
 

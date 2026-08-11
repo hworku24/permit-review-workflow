@@ -57,15 +57,36 @@ Start the mock county SOAP service and the API:
 PYTHONPATH=. .venv/bin/uvicorn permitflow.api.main:app --reload --port 8000
 ```
 
-Then generate a year of history and read the reports:
+Then build the demo database. One command, and running it again reproduces the same
+database down to the application numbers:
 
 ```bash
-PYTHONPATH=. .venv/bin/python scripts/seed_cases.py --cases 120
+PYTHONPATH=.:scripts .venv/bin/python scripts/seed_demo.py
 ```
 
-The seeder drives the real engine with an injected clock rather than writing rows directly,
-so the history it produces obeys the same guards and writes the same audit trail as
-production traffic. A recent run of 60 cases:
+It clears any existing case data, generates a year of history, and adds five cases parked
+in the states worth looking at: one issued with a clean review, one under review with four
+disciplines open, one returned to the applicant with the clock paused, one open since April
+and past its allowance, and one where the licensing replica was unreachable at intake. It
+prints their application numbers at the end.
+
+Every case is driven through the engine with an injected clock rather than written as rows,
+so the history obeys the same guards and writes the same audit trail as live traffic. That
+includes the demo cases: each one is in its state because the rules put it there.
+
+For history alone, without the five demo cases:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/seed_cases.py --cases 120 --reset
+```
+
+`--reset` is required on a database that already holds cases. Seeding is deterministic, so
+a second run would generate the same parcel APNs and fail on the unique index partway
+through. To clear case data without seeding, `scripts/reset_demo.py` does that alone.
+Reference data is never touched by either.
+
+The seeder prints compliance by month. The aggregate below comes from the reporting views
+after a 60 case run:
 
 ```
 decided  compliance  mean_net  median_net  p90_net  mean_gross  mean_wait
@@ -245,7 +266,7 @@ permitflow/
 sql/                schema, reporting views, reference data, legacy licensing schema
 corpus/             the zoning ordinance the retrieval layer reads
 docs/               requirements through traceability
-scripts/            case history generator
+scripts/            case history generator, demo builder, reset
 tests/              233 tests against a real database
 ```
 

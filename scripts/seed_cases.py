@@ -1,6 +1,6 @@
 """Generate a year of permit history.
 
-Runs the real engine with an injected clock rather than writing rows directly. That is the
+Runs the real engine with an injected clock, not raw row writes. That is the
 whole point: the resulting history obeys the same guards, writes the same audit trail, and
 produces the same clock pauses as production traffic, so the reporting views can be
 demonstrated on data that is actually consistent with the rules.
@@ -8,21 +8,29 @@ demonstrated on data that is actually consistent with the rules.
 Backdating timestamps after the fact would be faster and would produce a compliance number
 nobody should trust.
 
-    python scripts/seed_cases.py --cases 120
+    python scripts/seed_cases.py --cases 120 --reset
 
-Reference data must already be loaded (sql/003_seed.sql). Existing cases are left alone.
+Reference data must already be loaded (sql/003_seed.sql).
+
+`--seed` is fixed by default so a run reproduces exactly, which means a second run against
+a database that already holds cases generates the same parcel APNs and violates
+`parcel_apn_key`. Seeding therefore refuses to start on a non-empty database unless
+`--reset` is passed. Failing with a sentence beats failing with a constraint violation
+sixty cases in.
 """
 
 from __future__ import annotations
 
 import argparse
 import random
+import sys
 from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
 from permitflow.config import DEPARTMENT_TZ
-from permitflow.db import transaction
+from permitflow.db import get_pool, transaction
+from permitflow.demo import case_row_count, reset_case_data
 from permitflow.process import escalation
 from permitflow.process.engine import Actor, Engine
 from permitflow.process.states import Role
@@ -271,6 +279,23 @@ def seed_one(conn, clock: Clock, rng: random.Random, index: int) -> str:
     return f"{number} {permit_type} {outcome}"
 
 
+def prepare_database(*, reset: bool) -> None:
+    """Reset if asked, and refuse to seed on top of existing cases if not."""
+    with get_pool().connection() as conn:
+        conn.autocommit = True
+        if reset:
+            reset_case_data(conn)
+            print("Reset: existing case data cleared.")
+            return
+        existing = case_row_count(conn)
+    if existing:
+        sys.exit(
+            f"Database already holds {existing} applications. Seeding is deterministic, so "
+            "this run would generate the same parcel APNs and fail partway through.\n"
+            "Re-run with --reset to clear case data first."
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=int, default=120)
@@ -280,15 +305,22 @@ def main() -> None:
         default="2025-09-01",
         help="first submission date; cases are spread forward from here",
     )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="wipe existing case data first; required to seed a non-empty database",
+    )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
+
+    prepare_database(reset=args.reset)
 
     rng = random.Random(args.seed)
     start = datetime.fromisoformat(args.start).replace(hour=9, tzinfo=DEPARTMENT_TZ)
 
     for index in range(args.cases):
         # Each case gets its own clock starting a little after the last, so submissions
-        # are spread across the year rather than arriving in one burst.
+        # are spread across the year and do not all arrive in one burst.
         clock = Clock(start + timedelta(days=index * 2.4, hours=rng.randint(0, 6)))
         with transaction() as conn:
             summary = seed_one(conn, clock, rng, index)
