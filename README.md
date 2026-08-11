@@ -374,8 +374,15 @@ which is why the recent edge of the history is genuinely in flight.
 Check it before demoing:
 
 ```bash
-PYTHONPATH=. .venv/bin/python scripts/verify_demo.py
+PYTHONPATH=. .venv/bin/python scripts/verify_demo.py     # is the data there
+PYTHONPATH=. .venv/bin/python scripts/walkthrough.py     # does the workflow run
 ```
+
+The second drives a permit from screening to issuance over HTTP with no database access at
+all: triage, documents, intake, a deficiency, a resubmission that reopens only the discipline
+that raised it, issuance, the audit trail, the clock arithmetic, and an ordinance question
+that comes back unanswerable. It takes a URL, so it runs against the deployed copy too. It
+consumes the case it works on, so reseed before running it again.
 
 30 checks, each named for the screen it protects, non-zero exit if any fail. The one worth
 reading is the SLA identity: gross minus applicant wait equals net, asserted on every decided
