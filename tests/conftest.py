@@ -431,6 +431,60 @@ def overdue_task(committed_parties: dict[str, UUID]) -> dict:
 
 
 @pytest.fixture
+def triaged_case(committed_parties: dict[str, UUID]) -> dict:
+    """Committed, at screening, with a pending extraction that has withheld fields.
+
+    The narrative is deliberately vague. "Improvements" does not say what the work is,
+    "mixed use" narrows the occupancy to several possibilities and not one, and a bare
+    figure near the word budget is as likely to be a unit count as a valuation. All three
+    land below the threshold, which is what the screen has to show.
+    """
+    from permitflow.ai import recording, triage
+
+    narrative = (
+        "Interior improvements to a mixed-use building on Ironwood Way. Budget "
+        "approximately 240,000. Roughly 3,100 sq ft affected."
+    )
+    clock = FrozenClock(datetime.now(UTC) - timedelta(days=4))
+    with transaction() as conn:
+        engine = Engine(conn, clock=clock)
+        application_id = engine.create_application(
+            applicant_id=committed_parties["applicant_id"],
+            parcel_id=committed_parties["parcel_id"],
+            contractor_id=committed_parties["contractor_id"],
+            permit_type_code="BLD-COM-ALT",
+            scope_narrative=narrative,
+            declared_valuation=Decimal("240000"),
+            actor=APPLICANT,
+        )
+        engine.submit(application_id, APPLICANT)
+        engine.complete_enrichment(application_id)
+
+        extraction = triage.extract(narrative)
+        routing = triage.recommend_routing(conn, "BLD-COM-ALT", narrative)
+        recommendation_id = recording.record(
+            conn,
+            application_id=application_id,
+            kind="field_extraction",
+            payload=extraction.as_payload(),
+            model=extraction.model,
+            prompt_version=extraction.prompt_version,
+            occurred_at=clock.now,
+        )
+        recording.record(
+            conn,
+            application_id=application_id,
+            kind="discipline_routing",
+            payload=routing.as_payload(),
+            model=routing.model,
+            prompt_version=routing.prompt_version,
+            occurred_at=clock.now,
+        )
+
+    return {"application_id": application_id, "recommendation_id": recommendation_id}
+
+
+@pytest.fixture
 def soap_failures(soap_service: str):
     """Reset the mock's injected failures around each test that touches it."""
     from permitflow.integrations.soap_mock.server import failures

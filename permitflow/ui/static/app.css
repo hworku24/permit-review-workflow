@@ -176,3 +176,28 @@ tr.nested td { background: #fafbfc; padding-top: 0.4rem; padding-bottom: 0.6rem;
 .timeline .detail { grid-column: 2 / 4; color: var(--muted); font-size: 0.85rem; }
 
 td.nowrap { white-space: nowrap; }
+
+/* Triage */
+
+h2.sub { margin-top: 1.25rem; }
+.narrative {
+  margin: 0.5rem 0 0;
+  padding: 0.7rem 0.9rem;
+  background: #f7f9fb;
+  border-left: 3px solid var(--line);
+  font-size: 0.95rem;
+}
+td.evidence { color: var(--muted); font-style: italic; }
+.blank { color: var(--muted); font-size: 0.88rem; }
+
+.decision label { display: block; font-size: 0.8rem; color: var(--muted); margin: 0.6rem 0 0.2rem; }
+.decision input[type="text"] {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  max-width: 100%;
+}
+.decision .actions { margin-top: 0.8rem; display: flex; gap: 0.6rem; }
+button.secondary { background: #fff; color: var(--accent); }
+button.secondary:hover { background: #eef2f6; }

@@ -355,7 +355,37 @@ def unverified_licence(conn, rng, today: date) -> tuple[str, str]:
     return _number(conn, application_id), f"licence {status}, intake effect {effect}"
 
 
-SCENARIOS = [golden_path, awaiting_review, paused_on_applicant, escalated, unverified_licence]
+def vague_narrative(conn, rng, today: date) -> tuple[str, str]:
+    """Sitting at screening with a narrative that does not commit to much.
+
+    The case the triage screen exists for. "Improvements" does not say what the work is,
+    "mixed use" narrows the occupancy to several possibilities and not one, and a bare
+    figure near the word budget is as likely to be a unit count as a valuation. All three
+    come back below the threshold, so the clerk is shown a blank and the words the guess
+    came from, and keys the value themselves.
+    """
+    clock = seed_cases.Clock(_at(today, 4, hour=10))
+    parties = _parties(
+        conn, slot=6, apn="27-190-088", name="Ruth Deel", business="Ironwood Contracting LLC",
+        license_number="VA-CL-016554",
+    )
+    application_id = _start(
+        conn, clock, parties,
+        permit_type="BLD-COM-ALT",
+        narrative=(
+            "Interior improvements to a mixed-use building on Ironwood Way. Budget "
+            "approximately 240,000. Roughly 3,100 sq ft affected."
+        ),
+        value=240_000,
+    )
+    _run_triage(conn, application_id, decision="pending", at=clock.now)
+    return _number(conn, application_id), "at screening, three fields withheld below threshold"
+
+
+SCENARIOS = [
+    golden_path, awaiting_review, paused_on_applicant, escalated, unverified_licence,
+    vague_narrative,
+]
 
 
 def main() -> None:

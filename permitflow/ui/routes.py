@@ -14,7 +14,9 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from ..db import read_connection
+from ..ai import recording
+from ..config import get_settings
+from ..db import read_connection, transaction
 from ..process.states import Role
 from .deps import ACTOR_COOKIE, NotSignedIn, current_actor, staff_directory, to_picker
 
@@ -341,3 +343,123 @@ def case_detail(application_id: UUID, request: Request):
         }
 
     return TEMPLATES.TemplateResponse(request=request, name="case.html", context=context)
+
+
+# ---------------------------------------------------------------------------
+# Triage review
+# ---------------------------------------------------------------------------
+
+def _pending_extraction(conn, application_id: UUID) -> dict | None:
+    """The extraction awaiting a decision, newest first if triage was run twice."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT id, payload, model, prompt_version, confidence, created_at
+               FROM ai_recommendation
+               WHERE application_id = %s AND kind = 'field_extraction' AND accepted IS NULL
+               ORDER BY created_at DESC LIMIT 1""",
+            (str(application_id),),
+        )
+        return cur.fetchone()
+
+
+def _decided_extractions(conn, application_id: UUID) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT payload, override_payload, accepted, decided_by, decided_at
+               FROM ai_recommendation
+               WHERE application_id = %s AND kind = 'field_extraction'
+                 AND accepted IS NOT NULL
+               ORDER BY decided_at DESC""",
+            (str(application_id),),
+        )
+        return cur.fetchall()
+
+
+def _routing_recommendation(conn, application_id: UUID) -> dict | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT payload, model, prompt_version
+               FROM ai_recommendation
+               WHERE application_id = %s AND kind = 'discipline_routing'
+               ORDER BY created_at DESC LIMIT 1""",
+            (str(application_id),),
+        )
+        return cur.fetchone()
+
+
+@router.get("/case/{application_id}/triage", response_class=HTMLResponse)
+def triage_review(application_id: UUID, request: Request):
+    """What the model drafted, what it declined to draft, and the evidence for both."""
+    try:
+        actor = current_actor(request)
+    except NotSignedIn:
+        return to_picker(request)
+
+    with read_connection() as conn:
+        case = _summary(conn, application_id)
+        if case is None:
+            raise HTTPException(status_code=404, detail="no such application")
+        # The summary view carries no narrative, and this is the one screen where the
+        # applicant's own words have to sit next to what was drafted from them.
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT scope_narrative FROM application WHERE id = %s", (str(application_id),)
+            )
+            case["scope_narrative"] = cur.fetchone()["scope_narrative"]
+
+        pending = _pending_extraction(conn, application_id)
+        decided = _decided_extractions(conn, application_id)
+        # The fields panels read from whichever extraction is most relevant. After a
+        # decision the draft is still the interesting part of the page, and hiding it would
+        # leave a clerk who just accepted looking at an empty screen.
+        latest = pending or (decided[0] if decided else None)
+        context = {
+            "actor": actor,
+            "case": case,
+            "pending": pending,
+            "latest": latest,
+            "decided": decided,
+            "routing": _routing_recommendation(conn, application_id),
+            "threshold": get_settings().ai_field_confidence_threshold,
+            "may_decide": actor.role in (Role.INTAKE_CLERK, Role.SUPERVISOR),
+        }
+
+    return TEMPLATES.TemplateResponse(request=request, name="triage.html", context=context)
+
+
+@router.post("/case/{application_id}/triage")
+def decide_triage(
+    application_id: UUID,
+    request: Request,
+    recommendation_id: UUID = Form(...),
+    action: str = Form(...),
+    reason: str = Form(""),
+):
+    """Accept the draft as it stands, or override it with a reason.
+
+    Only clerks and supervisors decide. The check is here and in `recording.decide`, which
+    refuses a second decision on the same row: the first decision is the one that moved the
+    case, and letting it be overwritten would lose the actor who made it.
+    """
+    try:
+        actor = current_actor(request)
+    except NotSignedIn:
+        return to_picker(request)
+
+    if actor.role not in (Role.INTAKE_CLERK, Role.SUPERVISOR):
+        raise HTTPException(status_code=403, detail=f"role {actor.role} may not decide triage")
+
+    if action == "override" and not reason.strip():
+        # An override with no reason is the audit row that explains nothing two years later.
+        raise HTTPException(status_code=422, detail="an override needs a reason")
+
+    with transaction() as conn:
+        recording.decide(
+            conn,
+            recommendation_id,
+            actor=actor.username,
+            accepted=(action == "accept"),
+            override_payload={"reason": reason.strip()} if action == "override" else None,
+        )
+
+    return RedirectResponse(url=f"/ui/case/{application_id}/triage", status_code=303)

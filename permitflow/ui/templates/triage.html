@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Triage {{ case.application_number }}{% endblock %}
+
+{% macro ts(value) %}{{ value.strftime('%d %b %Y %H:%M') if value else 'not set' }}{% endmacro %}
+
+{% block content %}
+<p class="crumb">
+  <a href="/ui/case/{{ case.application_id }}">{{ case.application_number }}</a>
+</p>
+
+<div class="panel">
+  <h1>Intake triage</h1>
+  <p class="summary">{{ case.permit_type_name }} at {{ case.situs_address }}</p>
+
+  <h2 class="sub">What the applicant wrote</h2>
+  <blockquote class="narrative">{{ case.scope_narrative }}</blockquote>
+</div>
+
+{% if latest %}
+{% set fields = latest.payload.get('accepted', {}) %}
+{% set withheld = latest.payload.get('withheld', []) %}
+
+<div class="panel">
+  <h2>Drafted fields</h2>
+  <p class="note">
+    Drafted by <code>{{ latest.model or 'offline-rules-v1' }}</code>{% if latest.created_at %},
+    {{ ts(latest.created_at) }}{% endif %}. Nothing below was written to the application by
+    the model.
+  </p>
+
+  {% if fields %}
+  <table class="grid">
+    <thead>
+      <tr><th>Field</th><th>Value</th><th class="num">Confidence</th><th>Taken from the narrative</th></tr>
+    </thead>
+    <tbody>
+      {% for name, suggestion in fields.items() %}
+      <tr>
+        <td><code>{{ name }}</code></td>
+        <td><strong>{{ suggestion.value }}</strong></td>
+        <td class="num">{{ '%.2f'|format(suggestion.confidence) }}</td>
+        <td class="evidence">{{ suggestion.evidence }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="note">Nothing scored above the threshold. Every field is for the clerk to key.</p>
+  {% endif %}
+</div>
+
+{% if withheld %}
+<div class="panel">
+  <h2>Held back</h2>
+  <p class="note">
+    These scored below {{ '%.2f'|format(threshold) }}, so they are shown blank with the words
+    the guess came from. A blank costs the clerk twenty seconds. A confidently wrong value
+    gets accepted at a glance and becomes the record.
+  </p>
+  <table class="grid">
+    <thead>
+      <tr><th>Field</th><th>Value</th><th class="num">Confidence</th><th>Taken from the narrative</th></tr>
+    </thead>
+    <tbody>
+      {% for suggestion in withheld %}
+      <tr>
+        <td><code>{{ suggestion.name }}</code></td>
+        <td><span class="blank">blank, for the clerk to key</span></td>
+        <td class="num">{{ '%.2f'|format(suggestion.confidence) }}</td>
+        <td class="evidence">{{ suggestion.evidence }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Decision</h2>
+  {% if not pending %}
+  <p class="note">No extraction is waiting on a decision for this case.</p>
+  {% elif may_decide %}
+  <form method="post" action="/ui/case/{{ case.application_id }}/triage" class="decision">
+    <input type="hidden" name="recommendation_id" value="{{ pending.id }}">
+    <p class="note">
+      Accepting records that you, {{ actor.username }}, took the draft as it stands.
+      Overriding records that you did not, and why.
+    </p>
+    <label for="reason">Reason, if overriding</label>
+    <input type="text" id="reason" name="reason" placeholder="what the draft got wrong" size="60">
+    <div class="actions">
+      <button type="submit" name="action" value="accept">Accept the draft</button>
+      <button type="submit" name="action" value="override" class="secondary">Override</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="note">
+    Triage is decided by an intake clerk or a supervisor. You are signed in as
+    <code>{{ actor.role }}</code>, so this is read only for you.
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if decided %}
+<div class="panel">
+  <h2>Already decided</h2>
+  <table class="grid">
+    <thead>
+      <tr><th>Outcome</th><th>By</th><th>When</th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+      {% for row in decided %}
+      <tr>
+        <td>
+          {% if row.accepted %}<span class="pill sla-on-track">accepted</span>
+          {% else %}<span class="pill sla-at-risk">overridden</span>{% endif %}
+        </td>
+        <td>{{ row.decided_by }}</td>
+        <td>{{ ts(row.decided_at) }}</td>
+        <td>{{ (row.override_payload or {}).get('reason') or (row.override_payload or {}).get('clerk_correction', {}).get('reason') or 'none given' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if routing %}
+<div class="panel">
+  <h2>Discipline routing</h2>
+  <p class="note">
+    Standing rules come from configuration and are applied whatever the model says. The
+    recommendation can only widen the routing, so a model that misses something costs
+    nothing the department was not already going to miss, and a model that invents a
+    discipline changes nothing.
+  </p>
+  <div class="facts">
+    <div>
+      <dt>Always required for this permit type</dt>
+      <dd>{{ routing.payload.always_required|join(', ') or 'none' }}</dd>
+    </div>
+    <div>
+      <dt>Recommended additions</dt>
+      <dd>{{ routing.payload.recommended_additions|join(', ') or 'none' }}</dd>
+    </div>
+  </div>
+  {% if routing.payload.reasoning %}
+  <table class="grid">
+    <thead><tr><th>Discipline</th><th>Why</th></tr></thead>
+    <tbody>
+      {% for discipline, why in routing.payload.reasoning.items() %}
+      <tr><td>{{ discipline }}</td><td class="evidence">{{ why }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

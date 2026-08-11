@@ -73,6 +73,11 @@ WORK_TYPE_PATTERNS: list[tuple[str, str, float]] = [
     (r"\b(?:deck|porch|patio cover)\b", "ACCESSORY_DECK", 0.88),
     (r"\b(?:detached garage|shed|accessory structure|carport)\b", "ACCESSORY_STRUCTURE", 0.88),
     (r"\b(?:demolition|demolish|tear[- ]down)\b", "DEMOLITION", 0.90),
+    # Below the threshold on purpose. "Improvements" is what an applicant writes when
+    # they have not said what the work is, and an extractor that scores it like a
+    # tenant fit-out is claiming a confidence it does not have. Matched last, so any
+    # specific phrase above wins.
+    (r"\b(?:improvements?|upgrades?|refresh|modernisation|modernization)\b", "ALTERATION", 0.58),
 ]
 
 OCCUPANCY_PATTERNS: list[tuple[str, str, float]] = [
@@ -84,6 +89,9 @@ OCCUPANCY_PATTERNS: list[tuple[str, str, float]] = [
     (r"\b(?:retail|storefront|shop)\b", "M", 0.80),
     (r"\b(?:restaurant|cafe|bar|taproom)\b", "A-2", 0.82),
     (r"\b(?:warehouse|storage)\b", "S-1", 0.78),
+    # Mixed use narrows the occupancy to several possibilities and not to one. Scored
+    # below the threshold so the clerk is shown a blank and the evidence, and picks.
+    (r"\bmixed[- ]use\b", "B", 0.52),
 ]
 
 DISCIPLINE_SIGNALS: dict[str, list[tuple[str, float]]] = {
@@ -161,22 +169,40 @@ class OfflineProvider:
         return out
 
     def _extract_valuation(self, narrative: str) -> FieldSuggestion | None:
-        # "$180,000" or "$1.2 million" or "valued at 180000"
+        """Three readings of a figure, scored by how much the wording commits to it.
+
+        A dollar sign is an applicant stating a value. "Valued at" without one is nearly
+        as good. A bare number sitting near the word budget is a guess, and it is scored
+        below the threshold so the clerk gets a blank and the evidence span instead of a
+        number that looks keyed in.
+        """
+        # "$180,000" or "$1.2 million"
         match = re.search(r"\$\s?([\d,]+(?:\.\d+)?)\s*(million|m\b|k\b)?", narrative, re.I)
-        if not match:
-            match = re.search(r"valu\w*\s+(?:at\s+)?\$?\s?([\d,]+)", narrative, re.I)
-            if not match:
-                return None
+        if match:
+            amount = Decimal(match.group(1).replace(",", ""))
+            suffix = (match.group(2) or "").lower()
+            if suffix.startswith("m"):
+                amount *= 1_000_000
+            elif suffix.startswith("k"):
+                amount *= 1_000
+            return FieldSuggestion("declared_valuation", amount, 0.90, match.group(0))
+
+        # "valued at 180000"
+        match = re.search(r"valu\w*\s+(?:at\s+)?\$?\s?([\d,]+)", narrative, re.I)
+        if match:
             amount = Decimal(match.group(1).replace(",", ""))
             return FieldSuggestion("declared_valuation", amount, 0.74, match.group(0))
 
-        amount = Decimal(match.group(1).replace(",", ""))
-        suffix = (match.group(2) or "").lower()
-        if suffix.startswith("m"):
-            amount *= 1_000_000
-        elif suffix.startswith("k"):
-            amount *= 1_000
-        return FieldSuggestion("declared_valuation", amount, 0.90, match.group(0))
+        # A bare figure near a cost word, with no currency marker at all. As likely to be
+        # a square footage or a unit count as a valuation.
+        match = re.search(
+            r"(?:cost|budget|estimate\w*)\D{0,20}?([\d][\d,]{3,})", narrative, re.I
+        )
+        if match:
+            amount = Decimal(match.group(1).replace(",", ""))
+            return FieldSuggestion("declared_valuation", amount, 0.61, match.group(0))
+
+        return None
 
     def _extract_square_feet(self, narrative: str) -> FieldSuggestion | None:
         match = re.search(

@@ -16,8 +16,10 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-# `Depends(...)` in a parameter default is the FastAPI idiom, not a mutable-default bug.
+# `Depends(...)` and `Form(...)` in a parameter default are the FastAPI idiom, not a
+# mutable-default bug.
 "permitflow/api/routes/*" = ["B008"]
+"permitflow/ui/routes.py" = ["B008"]
 # Tests assert on magic values by design, and fixtures shadow builtins-adjacent names.
 "tests/*" = ["B011"]
 
