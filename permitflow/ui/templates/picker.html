@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+
+{% block content %}
+<div class="panel narrow">
+  <h1>Who are you today?</h1>
+  <p class="note">
+    This stands in for the city's single sign-on. It is not authentication, and the
+    application says so in <code>permitflow/ui/deps.py</code>. Every action is still checked
+    against the role below before the engine will perform it.
+  </p>
+
+  <table class="grid">
+    <thead>
+      <tr><th>Name</th><th>Username</th><th>Role</th><th class="num">Open work</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for person in staff %}
+      <tr class="{{ 'inactive' if not person.active }}">
+        <td>{{ person.full_name }}</td>
+        <td><code>{{ person.username }}</code></td>
+        <td>{{ person.role }}</td>
+        <td class="num">{{ person.open_tasks }}</td>
+        <td class="right">
+          {% if person.active %}
+          <form method="post" action="/ui/sign-in" class="inline">
+            <input type="hidden" name="username" value="{{ person.username }}">
+            <input type="hidden" name="next" value="{{ next }}">
+            <button type="submit">Act as</button>
+          </form>
+          {% else %}
+          <span class="muted">deactivated</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

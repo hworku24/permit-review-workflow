@@ -1,0 +1,121 @@
+/* Plain municipal software. Legible on a mid-size monitor at arm's length, which is how
+   a permit reviewer actually reads a queue. No framework, so there is no build step and
+   the whole application stays one deployable. */
+
+:root {
+  --ink: #1a1d21;
+  --muted: #5c6470;
+  --line: #d7dbe0;
+  --panel: #ffffff;
+  --page: #f2f4f6;
+  --accent: #1f4e79;
+  --breach: #9b1c1c;
+  --breach-bg: #fdeaea;
+  --risk: #8a5200;
+  --risk-bg: #fdf3e3;
+  --ok: #1f5c34;
+  --ok-bg: #eaf5ee;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+.bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.7rem 1.5rem;
+  background: var(--accent);
+  color: #fff;
+}
+.bar-left { display: flex; align-items: baseline; gap: 0.75rem; }
+.wordmark { font-weight: 700; letter-spacing: 0.02em; }
+.jurisdiction { font-size: 0.85rem; opacity: 0.85; }
+.bar-right { display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; }
+.whoami .role { opacity: 0.8; font-size: 0.8rem; text-transform: lowercase; }
+
+main { padding: 1.5rem; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+.panel.narrow { max-width: 46rem; }
+
+h1 { font-size: 1.25rem; margin: 0 0 0.35rem; }
+.summary { margin: 0 0 1rem; color: var(--muted); }
+.note { color: var(--muted); font-size: 0.9rem; margin: 1rem 0 0; }
+.muted { color: var(--muted); }
+
+table.grid { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+table.grid th, table.grid td {
+  text-align: left;
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+table.grid th {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-bottom-width: 2px;
+  white-space: nowrap;
+}
+table.grid tbody tr:hover { background: #f7f9fb; }
+table.grid td.num, table.grid th.num { text-align: right; }
+table.grid td.right { text-align: right; }
+tr.inactive { color: var(--muted); }
+
+a { color: var(--accent); }
+
+.pill {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sla-breached { background: var(--breach-bg); color: var(--breach); }
+.sla-at-risk  { background: var(--risk-bg);   color: var(--risk); }
+.sla-on-track { background: var(--ok-bg);     color: var(--ok); }
+.sla-unassigned, .sla-closed { background: #eef0f2; color: var(--muted); }
+strong.sla-breached { background: none; color: var(--breach); }
+
+button {
+  font: inherit;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: 3px;
+  cursor: pointer;
+}
+button:hover { background: #17395a; }
+.inline { display: inline; }
+button.linklike {
+  background: none;
+  border: none;
+  color: #fff;
+  text-decoration: underline;
+  padding: 0;
+  cursor: pointer;
+}
+
+code { font-size: 0.88em; background: #eef0f2; padding: 0.05rem 0.3rem; border-radius: 3px; }
+
+.foot {
+  padding: 1rem 1.5rem 2rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}

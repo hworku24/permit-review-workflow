@@ -286,6 +286,83 @@ def committed_parties() -> dict[str, UUID]:
     }
 
 
+def _commit_under_review(committed_parties: dict[str, UUID], submitted_at: datetime) -> dict:
+    """Drive an application to UNDER_REVIEW and commit it, for the API and UI to read.
+
+    `under_review` above holds its rows in an open transaction, which a request handler
+    opening its own connection cannot see. `submitted_at` is an injected clock rather than
+    a written timestamp, so an old case is old because it went through the engine when it
+    says it did.
+    """
+    clock = FrozenClock(submitted_at)
+    with transaction() as conn:
+        engine = Engine(conn, clock=clock)
+        application_id = engine.create_application(
+            applicant_id=committed_parties["applicant_id"],
+            parcel_id=committed_parties["parcel_id"],
+            contractor_id=committed_parties["contractor_id"],
+            permit_type_code="BLD-RES-ALT",
+            scope_narrative="Rear addition with a new load-bearing beam, 640 sq ft. Value $180,000.",
+            declared_valuation=Decimal("180000"),
+            actor=APPLICANT,
+        )
+        engine.submit(application_id, APPLICANT)
+        engine.complete_enrichment(application_id)
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE application_document
+                   SET status='RECEIVED', filename='x.pdf', uploaded_at=%s, uploaded_by='t'
+                   WHERE application_id=%s AND status='MISSING'""",
+                (clock.now, str(application_id)),
+            )
+        engine.accept_intake(application_id, CLERK)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT a.application_number, rt.discipline_code, r.username
+                   FROM review_task rt
+                   JOIN application a ON a.id = rt.application_id
+                   JOIN reviewer r ON r.id = rt.reviewer_id
+                   WHERE rt.application_id = %s
+                   ORDER BY rt.discipline_code LIMIT 1""",
+                (str(application_id),),
+            )
+            task = cur.fetchone()
+
+            cur.execute(
+                """SELECT username FROM reviewer
+                   WHERE active AND role = 'reviewer'
+                     AND id NOT IN (SELECT reviewer_id FROM review_task
+                                    WHERE application_id = %s AND reviewer_id IS NOT NULL)
+                   ORDER BY username LIMIT 1""",
+                (str(application_id),),
+            )
+            other = cur.fetchone()
+
+    return {
+        "application_id": application_id,
+        "application_number": task["application_number"],
+        "discipline_code": task["discipline_code"],
+        "reviewer_username": task["username"],
+        "other_reviewer_username": other["username"],
+    }
+
+
+@pytest.fixture
+def application_under_review(committed_parties: dict[str, UUID]) -> dict:
+    """Committed, recently submitted, tasks open and comfortably inside their allowance."""
+    return _commit_under_review(committed_parties, datetime.now(UTC) - timedelta(days=2))
+
+
+@pytest.fixture
+def overdue_task(committed_parties: dict[str, UUID]) -> dict:
+    """Committed and old enough that the SLA view calls its tasks BREACHED.
+
+    120 calendar days is roughly 85 business days, past every configured allowance.
+    """
+    return _commit_under_review(committed_parties, datetime.now(UTC) - timedelta(days=120))
+
+
 @pytest.fixture
 def soap_failures(soap_service: str):
     """Reset the mock's injected failures around each test that touches it."""

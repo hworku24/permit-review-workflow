@@ -13,8 +13,11 @@ week per round trip, so the API never does that.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..errors import (
     CircuitOpen,
@@ -24,6 +27,7 @@ from ..errors import (
     NotFound,
     PermissionDenied,
 )
+from ..ui import routes as ui_routes
 from .routes import ai, applications, queues, reports, tasks
 
 app = FastAPI(
@@ -42,6 +46,15 @@ app.include_router(tasks.router)
 app.include_router(queues.router)
 app.include_router(ai.router)
 app.include_router(reports.router)
+
+# Staff screens on the same app as the API. One process, one deployment, and no chance of
+# a page and an endpoint disagreeing because they were built against different queries.
+app.include_router(ui_routes.router)
+app.mount(
+    "/ui/static",
+    StaticFiles(directory=Path(__file__).resolve().parent.parent / "ui" / "static"),
+    name="ui-static",
+)
 
 
 @app.exception_handler(InvalidTransition)

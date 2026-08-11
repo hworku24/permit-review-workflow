@@ -47,6 +47,8 @@ python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 That starts two databases: PermitFlow's own, and a separate one standing in for the state
 licensing replica. The schema, views, and reference data load automatically.
 
+Then open `http://localhost:8000/ui/` for the staff screens, or `/docs` for the API.
+
 Start the mock county SOAP service and the API:
 
 ```bash
@@ -277,6 +279,7 @@ permitflow/
   integrations/     SOAP client, licensing client, shared resilience policy, mock service
   ai/               retrieval, grounded answers, triage, provider abstraction, recording
   api/              FastAPI routes, schemas, actor resolution, error mapping
+  ui/               staff screens, Jinja templates, one stylesheet
   db.py audit.py config.py errors.py
 sql/                schema, reporting views, reference data, legacy licensing schema
 corpus/             the zoning ordinance the retrieval layer reads

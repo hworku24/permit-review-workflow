@@ -10,3 +10,7 @@ python-dotenv==1.0.1
 zeep==4.3.1
 lxml==5.3.0
 httpx==0.28.1
+# Server rendered staff screens. python-multipart is what lets the form posts (sign in,
+# accept a recommendation) arrive as form fields.
+jinja2==3.1.5
+python-multipart==0.0.20

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}PermitFlow{% endblock %} | City of Rivermont</title>
+  <link rel="stylesheet" href="/ui/static/app.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="bar-left">
+      <span class="wordmark">PermitFlow</span>
+      <span class="jurisdiction">City of Rivermont</span>
+    </div>
+    {% if actor %}
+    <div class="bar-right">
+      <span class="whoami">{{ actor.username }} <span class="role">{{ actor.role }}</span></span>
+      <form method="post" action="/ui/sign-out" class="inline">
+        <button type="submit" class="linklike">Switch user</button>
+      </form>
+    </div>
+    {% endif %}
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="foot">
+    Demonstration system. The City of Rivermont does not exist and no case shown here is real.
+  </footer>
+</body>
+</html>
