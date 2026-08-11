@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import quote
 from uuid import UUID
@@ -763,8 +764,8 @@ def _discipline_rows(conn) -> list[dict]:
     """Every discipline with what it is wired into, so the page shows readiness.
 
     A discipline that exists but is routed to nothing, or has nobody certified, is
-    configured and useless. The counts are here so that state is visible on the row
-    instead of being discovered when a case sits unassigned.
+    configured and useless. The counts are here so that state is visible on the row, and
+    is not discovered later when a case sits unassigned.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -842,6 +843,7 @@ def admin(
             "permit_types": _permit_types(conn),
             "reviewers": _reviewers(conn),
             "policies": _phase_allowances(conn),
+            "documents": _document_rows(conn),
             "pending_standard": pending_standard,
             "saved": saved,
             "error": error,
@@ -1159,6 +1161,156 @@ def change_council_standard(
             f"{permit_type_code} standard is now {council_standard_days} days. "
             f"{abs(impact['moved'])} already-decided case(s) changed side, and reported "
             f"compliance moved from {impact['pct_now']}% to {impact['pct_after']}%."
+        ),
+        status_code=303,
+    )
+
+
+#: Same shape as a discipline code and for the same reasons.
+DOCUMENT_CODE = re.compile(r"^[A-Z][A-Z0-9_]{2,29}$")
+
+
+def _document_rows(conn) -> list[dict]:
+    """Document types with the permit types that ask for them and any valuation gate."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT dt.code, dt.name, dt.description,
+                   coalesce(
+                       json_agg(
+                           json_build_object(
+                               'permit_type_code', ptd.permit_type_code,
+                               'required', ptd.required,
+                               'min_valuation', ptd.min_valuation
+                           ) ORDER BY ptd.permit_type_code
+                       ) FILTER (WHERE ptd.permit_type_code IS NOT NULL),
+                       '[]'
+                   ) AS attachments,
+                   (SELECT count(*) FROM application_document ad
+                     WHERE ad.document_type_code = dt.code)                  AS ever_requested,
+                   (SELECT count(*) FROM application_document ad
+                     WHERE ad.document_type_code = dt.code AND ad.status = 'MISSING') AS outstanding
+            FROM document_type dt
+            LEFT JOIN permit_type_document ptd ON ptd.document_type_code = dt.code
+            GROUP BY dt.code, dt.name, dt.description
+            ORDER BY dt.code
+            """
+        )
+        return cur.fetchall()
+
+
+@router.post("/admin/documents")
+def add_document_type(
+    request: Request,
+    code: str = Form(...),
+    name: str = Form(...),
+    description: str = Form(""),
+    required_for: list[str] = Form(default=[]),
+    min_valuation: str = Form(""),
+):
+    """Add a document type and say which permit types require it.
+
+    `min_valuation` is the gate that keeps the department from demanding sealed structural
+    calculations for a rear deck. Left blank it applies to every application of that permit
+    type.
+
+    Worth knowing before using this: the checklist is rebuilt on submission and again on
+    every resubmission, and it reads this configuration when it runs. A new requirement
+    reaches applications submitted from now on, and it also reaches an open case the next
+    time that case comes back from the applicant. It never resets a document already
+    received.
+    """
+    try:
+        actor = current_actor(request)
+    except NotSignedIn:
+        return to_picker(request)
+    require_supervisor(actor)
+
+    code = code.strip().upper()
+    name = name.strip()
+
+    if not DOCUMENT_CODE.match(code):
+        return RedirectResponse(
+            url="/ui/admin?error=" + quote(
+                f"{code or 'the code'} is not a usable code. Three to thirty characters, "
+                "starting with a letter, upper case letters, digits, and underscores."
+            ),
+            status_code=303,
+        )
+    if not name:
+        return RedirectResponse(
+            url="/ui/admin?error=" + quote("A name is required."), status_code=303
+        )
+
+    threshold: Decimal | None = None
+    if min_valuation.strip():
+        try:
+            threshold = Decimal(min_valuation.strip().replace(",", "").lstrip("$"))
+        except InvalidOperation:
+            return RedirectResponse(
+                url="/ui/admin?error=" + quote(
+                    f"{min_valuation} is not a number. Leave it blank to require the "
+                    "document on every application of that permit type."
+                ),
+                status_code=303,
+            )
+        if threshold < 0:
+            return RedirectResponse(
+                url="/ui/admin?error=" + quote("A valuation threshold cannot be negative."),
+                status_code=303,
+            )
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM document_type WHERE code = %s", (code,))
+            if cur.fetchone():
+                return RedirectResponse(
+                    url="/ui/admin?error=" + quote(f"{code} already exists."), status_code=303
+                )
+
+            cur.execute(
+                "INSERT INTO document_type (code, name, description) VALUES (%s, %s, %s)",
+                (code, name, description.strip() or None),
+            )
+            for permit_type in required_for:
+                cur.execute(
+                    """INSERT INTO permit_type_document
+                           (permit_type_code, document_type_code, required, min_valuation)
+                       VALUES (%s, %s, true, %s)""",
+                    (permit_type, code, threshold),
+                )
+
+            # How many open cases will pick this up when they next come back from the
+            # applicant. Saying the number is the difference between a configuration change
+            # and a surprise at the front desk.
+            cur.execute(
+                """SELECT count(*) AS n FROM application
+                   WHERE status IN ('SUBMITTED','INTAKE_SCREENING','RETURNED_INCOMPLETE')
+                     AND permit_type_code = ANY(%s)""",
+                (list(required_for) or [""],),
+            )
+            in_flight = cur.fetchone()["n"]
+
+        audit.record(
+            conn,
+            entity_type="configuration",
+            entity_id=None,
+            action="add:document_type",
+            actor=actor.username,
+            after={
+                "code": code,
+                "name": name,
+                "required_for": sorted(required_for),
+                "min_valuation": str(threshold) if threshold is not None else None,
+                "open_applications_that_will_pick_it_up": in_flight,
+            },
+        )
+
+    gate = f" on applications over ${threshold:,.0f}" if threshold is not None else ""
+    return RedirectResponse(
+        url="/ui/admin?saved=" + quote(
+            f"{code} added{gate}. {in_flight} open application(s) will be asked for it the "
+            "next time they come back from the applicant."
         ),
         status_code=303,
     )

@@ -17,6 +17,13 @@ import psycopg
 #: ACOUSTIC and ORPHAN next to the real four.
 SEEDED_DISCIPLINES = ("ZONING", "STRUCTURAL", "FIRE", "ENVIRONMENTAL")
 
+#: The document types from `sql/003_seed.sql`. Same reasoning as the disciplines: the
+#: configuration screen can add them, so a reset has to be able to take them away again.
+SEEDED_DOCUMENT_TYPES = (
+    "SITE_PLAN", "FLOOR_PLAN", "ELEVATIONS", "STRUCTURAL_CALC", "ENERGY_FORM",
+    "SURVEY", "STORMWATER_PLAN", "FIRE_PLAN", "GEOTECH", "CONTRACTOR_AFF",
+)
+
 #: The council standards from `sql/003_seed.sql`. The configuration screen can change these
 #: and the change is retroactive, so a reset that did not restore them would leave the
 #: compliance figure quietly measured against whatever a test last set.
@@ -122,6 +129,17 @@ def reset_case_data(conn: psycopg.Connection) -> None:
             cur.execute(
                 "UPDATE permit_type SET council_standard_days = %s WHERE code = %s", (days, code)
             )
+        # Document types the configuration screen added, and the requirement rows that point
+        # at them. application_document is already gone with the case data above, so nothing
+        # else references these by the time they are deleted.
+        cur.execute(
+            "DELETE FROM permit_type_document WHERE document_type_code <> ALL(%s)",
+            (list(SEEDED_DOCUMENT_TYPES),),
+        )
+        cur.execute(
+            "DELETE FROM document_type WHERE code <> ALL(%s)", (list(SEEDED_DOCUMENT_TYPES),)
+        )
+
         for (permit_type, phase, discipline), days in SEEDED_ALLOWANCES.items():
             cur.execute(
                 """UPDATE sla_policy SET allowance_days = %s

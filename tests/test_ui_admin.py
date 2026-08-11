@@ -544,3 +544,224 @@ class TestCouncilStandard:
             data={"permit_type_code": "BLD-RES-ALT", "council_standard_days": 25},
         )
         assert response.status_code == 403
+
+
+class TestDocumentConfiguration:
+    def test_the_screen_lists_document_types_and_what_asks_for_them(self, api_client) -> None:
+        signed_in(api_client)
+        body = text_of(api_client.get("/ui/admin").text)
+        assert "Required documents" in body
+        assert "SITE_PLAN" in body
+        assert "STRUCTURAL_CALC" in body
+
+    def test_a_valuation_gate_is_shown(self, api_client) -> None:
+        """STRUCTURAL_CALC is seeded behind a threshold, which is the point of the column."""
+        signed_in(api_client)
+        body = text_of(api_client.get("/ui/admin").text)
+        assert "over $" in body
+
+    def test_a_reviewer_may_not_add_one(self, api_client) -> None:
+        signed_in(api_client, "pvasquez")
+        response = api_client.post(
+            "/ui/admin/documents", data={"code": "NOPE", "name": "Not allowed"}
+        )
+        assert response.status_code == 403
+
+    def test_a_bad_code_is_refused(self, api_client) -> None:
+        signed_in(api_client)
+        response = api_client.post(
+            "/ui/admin/documents", data={"code": "lower case", "name": "X"}, follow_redirects=True
+        )
+        assert "not a usable code" in text_of(response.text)
+
+    def test_a_non_numeric_threshold_is_refused(self, api_client) -> None:
+        signed_in(api_client)
+        response = api_client.post(
+            "/ui/admin/documents",
+            data={"code": "BADGATE", "name": "Bad gate", "min_valuation": "quite a lot"},
+            follow_redirects=True,
+        )
+        assert "is not a number" in text_of(response.text)
+
+    def test_a_duplicate_code_is_refused(self, api_client) -> None:
+        signed_in(api_client)
+        response = api_client.post(
+            "/ui/admin/documents",
+            data={"code": "SITE_PLAN", "name": "Site plan again"},
+            follow_redirects=True,
+        )
+        assert "already exists" in text_of(response.text)
+
+    def test_a_new_application_is_asked_for_it(self, api_client, committed_parties) -> None:
+        """The checklist item: intake uses the updated configuration, with no code change."""
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/documents",
+            data={
+                "code": "SOLAR_LAYOUT",
+                "name": "Solar array layout",
+                "required_for": ["BLD-RES-ALT"],
+            },
+            follow_redirects=False,
+        )
+
+        with transaction() as conn:
+            engine = Engine(conn)
+            application_id = engine.create_application(
+                applicant_id=committed_parties["applicant_id"],
+                parcel_id=committed_parties["parcel_id"],
+                contractor_id=committed_parties["contractor_id"],
+                permit_type_code="BLD-RES-ALT",
+                scope_narrative="Rear addition, 640 sq ft. Value $180,000.",
+                declared_valuation=180000,
+                actor=APPLICANT,
+            )
+            engine.submit(application_id, APPLICANT)
+            engine.complete_enrichment(application_id)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT document_type_code, status FROM application_document WHERE application_id = %s",
+                    (str(application_id),),
+                )
+                docs = {r["document_type_code"]: r["status"] for r in cur.fetchall()}
+
+        assert docs.get("SOLAR_LAYOUT") == "MISSING"
+
+    def test_a_valuation_gate_keeps_it_off_small_projects(
+        self, api_client, committed_parties
+    ) -> None:
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/documents",
+            data={
+                "code": "GEOTECH_2",
+                "name": "Second geotechnical report",
+                "required_for": ["BLD-RES-ALT"],
+                "min_valuation": "500000",
+            },
+            follow_redirects=False,
+        )
+
+        with transaction() as conn:
+            engine = Engine(conn)
+            small = engine.create_application(
+                applicant_id=committed_parties["applicant_id"],
+                parcel_id=committed_parties["parcel_id"],
+                contractor_id=committed_parties["contractor_id"],
+                permit_type_code="BLD-RES-ALT",
+                scope_narrative="Small rear addition.",
+                declared_valuation=180000,
+                actor=APPLICANT,
+            )
+            engine.submit(small, APPLICANT)
+            engine.complete_enrichment(small)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) AS n FROM application_document"
+                    " WHERE application_id = %s AND document_type_code = 'GEOTECH_2'",
+                    (str(small),),
+                )
+                assert cur.fetchone()["n"] == 0
+
+    def test_an_open_case_picks_it_up_at_its_next_resubmission(
+        self, api_client, committed_parties
+    ) -> None:
+        """The behaviour the banner promises. Different from the other two config changes."""
+        with transaction() as conn:
+            engine = Engine(conn)
+            application_id = engine.create_application(
+                applicant_id=committed_parties["applicant_id"],
+                parcel_id=committed_parties["parcel_id"],
+                contractor_id=committed_parties["contractor_id"],
+                permit_type_code="BLD-RES-ALT",
+                scope_narrative="Rear addition, 640 sq ft. Value $180,000.",
+                declared_valuation=180000,
+                actor=APPLICANT,
+            )
+            engine.submit(application_id, APPLICANT)
+            engine.complete_enrichment(application_id)
+            engine.return_incomplete(application_id, CLERK, ["site plan not drawn to scale"])
+
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/documents",
+            data={"code": "LATE_DOC", "name": "Added mid-flight", "required_for": ["BLD-RES-ALT"]},
+            follow_redirects=False,
+        )
+
+        assert "LATE_DOC" not in _documents_on(application_id)
+
+        with transaction() as conn:
+            Engine(conn).resubmit(application_id, APPLICANT)
+
+        assert "LATE_DOC" in _documents_on(application_id)
+
+    def test_a_received_document_is_never_reset(self, api_client, committed_parties) -> None:
+        with transaction() as conn:
+            engine = Engine(conn)
+            application_id = engine.create_application(
+                applicant_id=committed_parties["applicant_id"],
+                parcel_id=committed_parties["parcel_id"],
+                contractor_id=committed_parties["contractor_id"],
+                permit_type_code="BLD-RES-ALT",
+                scope_narrative="Rear addition, 640 sq ft. Value $180,000.",
+                declared_valuation=180000,
+                actor=APPLICANT,
+            )
+            engine.submit(application_id, APPLICANT)
+            engine.complete_enrichment(application_id)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE application_document SET status='RECEIVED', filename='x.pdf',
+                       uploaded_at=now(), uploaded_by='t'
+                       WHERE application_id=%s AND status='MISSING'""",
+                    (str(application_id),),
+                )
+            engine.return_incomplete(application_id, CLERK, ["needs a seal"])
+
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/documents",
+            data={"code": "ANOTHER_DOC", "name": "Another", "required_for": ["BLD-RES-ALT"]},
+            follow_redirects=False,
+        )
+        with transaction() as conn:
+            Engine(conn).resubmit(application_id, APPLICANT)
+
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) AS n FROM application_document
+                   WHERE application_id = %s AND document_type_code = 'SITE_PLAN'
+                     AND status = 'RECEIVED'""",
+                (str(application_id),),
+            )
+            assert cur.fetchone()["n"] == 1
+
+    def test_the_change_is_audited_with_the_number_of_cases_it_will_reach(
+        self, api_client
+    ) -> None:
+        signed_in(api_client)
+        api_client.post(
+            "/ui/admin/documents",
+            data={"code": "AUDITED_DOC", "name": "Audited", "required_for": ["BLD-COM-NEW"],
+                  "min_valuation": "1000000"},
+            follow_redirects=False,
+        )
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT actor, after_value FROM audit_log WHERE action = 'add:document_type'"
+            )
+            row = cur.fetchone()
+        assert row["actor"] == "dhollis"
+        assert row["after_value"]["code"] == "AUDITED_DOC"
+        assert row["after_value"]["min_valuation"] == "1000000"
+        assert "open_applications_that_will_pick_it_up" in row["after_value"]
+
+
+def _documents_on(application_id) -> set[str]:
+    with read_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT document_type_code FROM application_document WHERE application_id = %s",
+            (str(application_id),),
+        )
+        return {r["document_type_code"] for r in cur.fetchall()}

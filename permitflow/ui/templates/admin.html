@@ -281,16 +281,160 @@
 </div>
 
 <div class="panel">
-  <h2>What this does not do</h2>
+  <h2>Required documents</h2>
   <p class="note">
-    Adding a discipline does not touch cases already under review. Routing is decided when
-    intake is accepted, and reopening a discipline on a case whose reviewers have already
-    signed off would rewrite a decision that was made under the old rules.
+    Which permit types ask for which documents, and at what project size. A valuation
+    threshold is what keeps the department from demanding sealed structural calculations for
+    a rear deck.
   </p>
+
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Code</th><th>Name</th><th>Required for</th>
+        <th class="num">Ever requested</th><th class="num">Outstanding now</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in documents %}
+      <tr>
+        <td><code>{{ row.code }}</code></td>
+        <td>
+          {{ row.name }}
+          {% if row.description %}<br><span class="muted">{{ row.description }}</span>{% endif %}
+        </td>
+        <td>
+          {% if not row.attachments %}
+            <span class="pill sla-at-risk">no permit type asks for it</span>
+          {% else %}
+            {% for link in row.attachments %}
+            <div class="attach">
+              <code>{{ link.permit_type_code }}</code>
+              {% if link.min_valuation %}
+                <span class="muted">over ${{ '{:,.0f}'.format(link.min_valuation|float) }}</span>
+              {% else %}
+                <span class="muted">always</span>
+              {% endif %}
+            </div>
+            {% endfor %}
+          {% endif %}
+        </td>
+        <td class="num">{{ row.ever_requested }}</td>
+        <td class="num {{ 'sla-at-risk' if row.outstanding }}">{{ row.outstanding }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Add a required document</h2>
+
+  {% if not may_edit %}
+    <p class="note">
+      Configuration is changed by a supervisor. You are signed in as <code>{{ actor.role }}</code>,
+      so this is read only for you.
+    </p>
+  {% else %}
+  <p class="banner">
+    This one reaches open cases. The checklist is rebuilt on submission and again on every
+    resubmission, and it reads this configuration when it runs. A new requirement applies to
+    applications submitted from now on, and to an open case the next time it comes back from
+    the applicant. A document already received is never reset.
+  </p>
+
+  <form method="post" action="/ui/admin/documents" class="config">
+    <div class="field-row">
+      <div>
+        <label for="doc_code">Code</label>
+        <input type="text" id="doc_code" name="code" placeholder="SOLAR_LAYOUT" required
+               pattern="[A-Za-z][A-Za-z0-9_]{2,29}">
+      </div>
+      <div class="grow">
+        <label for="doc_name">Name</label>
+        <input type="text" id="doc_name" name="name" placeholder="Solar array layout" required>
+      </div>
+    </div>
+
+    <label for="doc_description">Description</label>
+    <input type="text" id="doc_description" name="description" size="70"
+           placeholder="What the applicant has to supply">
+
+    <label for="min_valuation">Only required above this declared valuation</label>
+    <input type="text" id="min_valuation" name="min_valuation" placeholder="leave blank for all">
+    <div class="hint">
+      Blank means every application of the permit types ticked below. A figure means the
+      document is only asked for once the declared value passes it.
+    </div>
+
+    <fieldset>
+      <legend>Required for</legend>
+      <div class="checks">
+        {% for permit in permit_types %}
+        <label class="check">
+          <input type="checkbox" name="required_for" value="{{ permit.code }}">
+          {{ permit.name }} <span class="muted">{{ permit.code }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <div class="hint">
+        Tick nothing and the document type exists but no application ever asks for it.
+      </div>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit">Add document type</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>What reaches open cases</h2>
   <p class="note">
-    The SLA allowance is not asked for here. <code>sla_policy</code> falls back to the row
-    with no discipline set, so a new discipline inherits its permit type's review allowance
-    until somebody decides it needs its own.
+    The three changes on this screen behave differently, and the difference is deliberate
+    in each case.
   </p>
+  <table class="grid">
+    <thead>
+      <tr><th>Change</th><th>Reaches</th><th>Why</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Review discipline</td>
+        <td>New applications only</td>
+        <td>
+          Routing is decided when intake is accepted. Opening a discipline on a case whose
+          reviewers have already signed off would rewrite a decision made under the old
+          rules.
+        </td>
+      </tr>
+      <tr>
+        <td>Phase allowance</td>
+        <td>Tasks opened afterwards</td>
+        <td>
+          The allowance is written onto the task when it opens. A supervisor cannot make a
+          reviewer late, or on time, by editing configuration underneath them.
+        </td>
+      </tr>
+      <tr>
+        <td>Required document</td>
+        <td>New applications, and open ones at their next resubmission</td>
+        <td>
+          The checklist is rebuilt whenever a case arrives or comes back, so a new
+          requirement catches work still in flight. A document already received is never
+          reset.
+        </td>
+      </tr>
+      <tr>
+        <td>Council standard</td>
+        <td>Everything ever decided</td>
+        <td>
+          The compliance view applies the current standard to the whole history. This is
+          the one that needs a second click.
+        </td>
+      </tr>
+    </tbody>
+  </table>
 </div>
 {% endblock %}
