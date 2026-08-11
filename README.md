@@ -6,15 +6,18 @@ reviewed by four specialists working in parallel, stops and starts a clock that 
 business days, pulls data from two systems nobody in the department controls, and has to be
 reconstructable line by line when a decision gets appealed two years later.
 
+**Live: https://d2z5bkq0t31r0m.cloudfront.net** behind one shared passphrase.
+
 The client is the City of Rivermont, which does not exist. The zoning provisions, fee
 thresholds, and review timelines are modeled on patterns common to mid-size US
 municipalities. The engineering problems are real.
 
-Two things worth stating plainly. The repository was initialized after the code was
+Three things worth stating plainly. The repository was initialized after the code was
 written, so the commits are sequenced to follow the build order in
-[docs/05-user-stories.md](docs/05-user-stories.md) and not a real calendar. And no
-part of this has ever run in a municipal department. Every number in this README comes
-from the seeded case generator described below.
+[docs/05-user-stories.md](docs/05-user-stories.md) and not a real calendar. No part of this
+has ever run in a municipal department, and every number below comes from the seeded case
+generator. And the sign-in on the deployed copy is a gate on a public address, not the
+city's single sign-on; the page says so.
 
 ## Why this exists
 
@@ -35,124 +38,23 @@ A few examples of what that looks like in practice:
   applications, the department has converted somebody else's outage into its own service
   failure, and the front desk takes the calls.
 
-## Live
+## What it does
 
-The deployed demonstration runs at **https://d2z5bkq0t31r0m.cloudfront.net** behind one
-shared passphrase. It is one Fargate task behind a load balancer with CloudFront in front
-for HTTPS, and a small managed Postgres nothing on the internet can open a connection to.
-See [deploy/aws/README.md](deploy/aws/README.md) for what it costs, what each hop can reach,
-and the things it deliberately does not do.
+Intake through issuance, for department staff.
 
-The sign-in there is a gate on a public address, not the city's single sign-on, and the page
-says so. Behind it the user picker still chooses which member of staff you are acting as,
-because the authorization worth demonstrating is the engine's.
+An applicant's submission is screened by a clerk, checked against the county's parcel
+records and the state's contractor licensing, and either returned as incomplete or accepted.
+Acceptance opens a review task per discipline, and those run in parallel with their own
+assignee, their own clock, and their own round counter. Any discipline can send the case
+back; the ones that already approved do not review it again. A supervisor issues or denies.
 
-## Running it
+Six screens: a reviewer's queue, the case record, intake triage, ordinance questions, a
+supervisor dashboard, and configuration. There is a JSON API behind them at `/docs`.
 
-Postgres and Docker are the only prerequisites. Nothing here needs an API key or an account.
-
-```bash
-docker compose up -d
-python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-```
-
-That starts two databases: PermitFlow's own, and a separate one standing in for the state
-licensing replica. The schema, views, and reference data load automatically.
-
-Then open `http://localhost:8000/ui/` for the staff screens, or `/docs` for the API.
-
-Six screens: a reviewer's queue sorted by what is most at risk, a case record holding the
-parts of a case that live in eleven tables, the intake triage screen with what the model
-drafted next to what it held back, an ordinance question screen that answers in the
-ordinance's own words or declines, a supervisor dashboard over the reporting views, and a
-configuration screen where a supervisor adds a review discipline without a deploy.
-
-Start the mock county SOAP service and the API:
-
-```bash
-.venv/bin/uvicorn permitflow.integrations.soap_mock.server:app --port 8081
-```
-
-```bash
-PYTHONPATH=. .venv/bin/uvicorn permitflow.api.main:app --reload --port 8000
-```
-
-Then build the demo database. One command, and running it again reproduces the same
-database down to the application numbers:
-
-```bash
-PYTHONPATH=.:scripts .venv/bin/python scripts/seed_demo.py
-```
-
-It clears any existing case data, generates a year of history, and adds six cases parked in
-the states worth looking at: one issued with a clean review, one under review with four
-disciplines open, one returned to the applicant with the clock paused, one open for four
-months and past its allowance, one where the licensing replica was unreachable at intake,
-and one whose narrative is vague enough that three fields come back below the confidence
-threshold. It prints their application numbers at the end.
-
-The history is worked backwards from the run date, so the newest cases are days old and the
-last-30-days columns on the reports have something in them. Pass `--today` to pin the run
-date and get the same database on any machine on any day.
-
-Every case is driven through the engine with an injected clock, not written as rows, so the
-history obeys the same guards and writes the same audit trail as live traffic. That includes
-the demo cases: each one is in its state because the rules put it there.
-
-Then check it before demoing:
-
-```bash
-PYTHONPATH=. .venv/bin/python scripts/verify_demo.py
-```
-
-Twenty-five checks, each named for the screen it protects, exiting non-zero if any fail.
-The one worth reading is the SLA identity: gross minus applicant wait equals net, asserted
-on every decided case and not on the averages, because an average can hold while individual
-rows are wrong.
-
-For history alone, without the five demo cases:
-
-```bash
-PYTHONPATH=. .venv/bin/python scripts/seed_cases.py --cases 120 --reset
-```
-
-`--reset` is required on a database that already holds cases. Seeding is deterministic, so
-a second run would generate the same parcel APNs and fail on the unique index partway
-through. To clear case data without seeding, `scripts/reset_demo.py` does that alone.
-Reference data is never touched by either.
-
-The seeder prints compliance by month. The aggregate below comes from the reporting views
-after the default 120 case run:
-
-```
-decided  compliance  mean_net  median_net  p90_net  mean_gross  mean_wait
-    121       69.4%      19.5          19     28.0        29.7       10.2
-```
-
-Mean gross minus mean applicant wait equals mean net, which is the arithmetic the whole SLA
-design exists to get right. The 69.4% compliance figure is deliberately in the same range as
-the 61% the fictional department was hitting before, because a demo where everything passes
-does not demonstrate anything.
-
-Run the tests:
-
-```bash
-PYTHONPATH=. .venv/bin/python -m pytest
-```
-
-287 tests, against a real Postgres. The database behaviour matters too much to fake: the
-business day functions, the append-only audit triggers, the partial unique indexes, and the
-reporting views are all things a substitute would let me get wrong.
-
-The Java service has its own suite, run from `licensing-verifier/`:
-
-```bash
-./mvnw -B test
-```
-
-Its repository test also runs against the licensing replica from docker-compose, for the
-same reason: `char(12)` padding and an unconstrained status column are the behaviour under
-test, and an embedded database has neither. CI runs both suites.
+The requirements this was built against, and the process it implements, are written up in
+[docs/01-requirements.md](docs/01-requirements.md) and
+[docs/02-process-map.md](docs/02-process-map.md). Every requirement is traced to a module
+and a named test in [docs/06-traceability.md](docs/06-traceability.md).
 
 ## How it fits together
 
@@ -264,6 +166,23 @@ CIDR rule at all. [docs/07-architecture.md](docs/07-architecture.md) has both di
 the reasoning, and [deploy/aws/README.md](deploy/aws/README.md) has the cost and the
 teardown.
 
+## Data model
+
+24 tables and 8 reporting views. [docs/03-data-model.md](docs/03-data-model.md) has the ERD
+and the choices worth arguing about; the two that matter most are in
+[Decisions](#decisions-i-would-defend-in-a-review) below.
+
+The reporting views are where the arithmetic lives. Compliance by month against each permit
+type's council standard, cycle time split into gross, net, and applicant wait, per-reviewer
+workload, per-discipline bottleneck, open escalations. The screens read those views and
+recompute nothing, because the compliance figure goes to city council and a number
+recalculated next to the SQL that already computes it is a number that will eventually
+disagree with itself.
+
+Business day arithmetic is a SQL function and a Python function. Two copies of one rule is a
+real risk, so `tests/test_sla_parity.py` runs both over generated date pairs spanning
+weekends, holidays, and the turn of the year, and fails if they ever differ.
+
 ## Decisions I would defend in a review
 
 **Review tasks are rows, not columns.** The shortcut is four booleans on the application:
@@ -354,6 +273,142 @@ It runs with no credentials by default. The offline provider is rule-based, dete
 and genuinely useful, not a stub, which is what lets CI test the AI behaviour at all.
 A hosted Claude path is available when a key is configured.
 
+## Configuration, and what a department can change without a developer
+
+The handover question is what happens when the consultant leaves. Four things are rows in
+reference tables, editable by a supervisor at `/ui/admin`, and they behave differently on
+purpose:
+
+| Change | Reaches |
+|---|---|
+| A new review discipline | New applications only |
+| A phase SLA allowance | Tasks opened afterwards |
+| A required document | New applications, and open ones at their next resubmission |
+| A council standard | Everything ever decided |
+
+Routing is decided when intake is accepted, so opening a discipline on a case whose reviewers
+have already signed off would rewrite a decision made under the old rules. An allowance is
+written onto the task when it opens, so a supervisor cannot make a reviewer late by editing
+configuration underneath them. The document checklist is rebuilt whenever a case arrives or
+comes back, so a new requirement catches work still in flight, and a document already
+received is never reset.
+
+The council standard is the awkward one. The compliance view applies the current standard to
+every case ever decided, so moving it rewrites what the department has already reported. The
+screen refuses to do that quietly: a change that reclassifies decided cases needs a second
+click, the confirmation shows how many cases change side and what the rate moves from and to,
+and the audit row carries both figures.
+
+## Security
+
+**Authorization is in the engine.** Every action is checked against the actor's role in
+`permitflow/process/states.py` before the engine will perform it, so a rule cannot be skipped
+by driving the engine from a script. The API and the screens check a few things at their own
+boundary as well, and those are the endpoints whose shape is role-specific, like a reviewer's
+own queue.
+
+**The audit trail is append-only in the database.** Triggers raise `insufficient_privilege`
+on UPDATE, DELETE, and TRUNCATE. The test fixtures have to disable them as the table owner
+just to reset between tests, which is the clearest demonstration available that the
+application role never can.
+
+**Identity is the honest gap.** `X-Actor` on the API and the user picker on the screens name
+an actor without proving anything. That is correct for a laptop and wrong for a public URL,
+so the deployment adds one shared passphrase with a signed, expiring, httponly cookie. It is
+a gate, not a directory, and `permitflow/ui/gate.py` says so at the top. A real deployment
+puts the city's SSO in front of this and resolves the actor from a validated token.
+
+**Nothing here needs a credential to run.** The AI provider defaults to a deterministic
+offline implementation and the integrations default to local stand-ins, which is what lets
+CI test the whole thing with no secrets.
+
+## Running it locally
+
+Docker is the only prerequisite. Nothing needs an API key or an account.
+
+```bash
+docker compose up -d
+python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+```
+
+That starts two databases: PermitFlow's own, and a separate one standing in for the state
+licensing replica. The schema, views, and reference data load automatically.
+
+Start the mock county SOAP service and the application:
+
+```bash
+.venv/bin/uvicorn permitflow.integrations.soap_mock.server:app --port 8081
+```
+
+```bash
+PYTHONPATH=. .venv/bin/uvicorn permitflow.api.main:app --reload --port 8000
+```
+
+Build the demo database. One command, and running it again reproduces the same database down
+to the application numbers:
+
+```bash
+PYTHONPATH=.:scripts .venv/bin/python scripts/seed_demo.py
+```
+
+It clears any existing case data, generates a year of history, and adds six cases parked in
+the states worth looking at: one issued with a clean review, one under review with four
+disciplines open, one returned to the applicant with the clock paused, one four months old
+and past its allowance, one where the licensing replica was unreachable at intake, and one
+whose narrative is vague enough that three fields come back below the confidence threshold.
+It prints their application numbers at the end.
+
+Then open `http://localhost:8000/ui/` for the screens, or `/docs` for the API.
+
+Everything is driven through the engine with an injected clock, not written as rows, so the
+history obeys the same guards and writes the same audit trail as live traffic. The history is
+worked backwards from the run date, so the newest cases are days old; pass `--today` to pin
+it and get the same database on any machine on any day. Nothing is carried past the run date,
+which is why the recent edge of the history is genuinely in flight.
+
+Check it before demoing:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/verify_demo.py
+```
+
+30 checks, each named for the screen it protects, non-zero exit if any fail. The one worth
+reading is the SLA identity: gross minus applicant wait equals net, asserted on every decided
+case and not on the averages, because an average can hold while individual rows are wrong.
+
+`scripts/reset_demo.py` clears case data without seeding. Reference data is never touched by
+either, apart from the restores that put configuration back where the seed left it.
+
+## Testing and CI
+
+```bash
+PYTHONPATH=. .venv/bin/python -m pytest        # 368 tests
+cd licensing-verifier && ./mvnw -B test        # 20 tests
+```
+
+Against a real Postgres, both of them. The database behaviour matters too much to fake: the
+business day functions, the append-only triggers, the partial unique indexes, and the
+reporting views are all things a substitute would let me get wrong. The Java repository test
+runs against the licensing replica for the same reason, since `char(12)` padding and an
+unconstrained status column are the behaviour under test.
+
+CI runs three jobs on every push: the Python suite with both databases as service containers,
+the Java suite, and a compose file check. The whole thing runs with no model credentials,
+because the offline AI provider is deterministic and the tests assert on behaviour.
+
+## Deployment
+
+One Fargate task behind a load balancer, CloudFront in front for HTTPS, and a small managed
+Postgres nothing on the internet can open a connection to. About $38 a month while it is up.
+
+```bash
+./deploy/aws/refresh.sh     # build, push, roll the service
+./deploy/aws/teardown.sh    # remove everything that bills
+```
+
+[deploy/aws/README.md](deploy/aws/README.md) has the cost breakdown, what each hop can reach,
+and the things it deliberately does not do, each with the reason.
+
 ## Documentation
 
 The `docs/` directory holds the consulting side of the work, written the way it would be for
@@ -367,9 +422,10 @@ an actual engagement:
 | [04-integration-spec.md](docs/04-integration-spec.md) | Both external contracts, failure handling, intake sequence |
 | [05-user-stories.md](docs/05-user-stories.md) | Stories by sprint, with acceptance criteria written so they read as test cases |
 | [06-traceability.md](docs/06-traceability.md) | Every requirement traced to a design artifact, a module, and a test |
+| [07-architecture.md](docs/07-architecture.md) | Both diagrams, the security boundary, and what is not in the picture |
 
-The traceability matrix is checked rather than asserted. Every module path and test name in
-it was verified to exist.
+The traceability matrix is checked, not asserted. Every module path and test name in it was
+verified to exist.
 
 ## Layout
 
@@ -379,22 +435,29 @@ permitflow/
   integrations/     SOAP client, licensing client, shared resilience policy, mock service
   ai/               retrieval, grounded answers, triage, provider abstraction, recording
   api/              FastAPI routes, schemas, actor resolution, error mapping
-  ui/               staff screens, Jinja templates, one stylesheet
-  db.py audit.py config.py errors.py
+  ui/               staff screens, Jinja templates, one stylesheet, the deployment gate
+  db.py audit.py config.py errors.py demo.py
 sql/                schema, reporting views, reference data, legacy licensing schema
 corpus/             the zoning ordinance the retrieval layer reads
-docs/               requirements through traceability
-scripts/            case history generator, demo builder, reset, demo verification
-tests/              287 tests against a real database
+deploy/aws/         container, task definition, refresh and teardown, cost
+docs/               requirements through architecture
+scripts/            seeding, reset, demo verification, deployment init
+tests/              368 tests against a real database
+licensing-verifier/ the Spring service, with its own suite
 ```
 
-## Scope
+## Scope and limitations
 
-Phase 1 covers intake through issuance. Inspections, certificate of occupancy, fee
-calculation and payment, the public applicant portal, and appeals hearing management are all
-out of scope and are listed as such in the requirements. The API supports a portal, the UI
-would be Phase 2.
+Phase 1 is intake through issuance. Inspections, certificate of occupancy, fee calculation
+and payment, the public applicant portal, and appeals hearing management are all out of scope
+and listed as such in the requirements.
 
-The `X-Actor` header is not authentication. A real deployment puts the city's SSO in front
-of this. It is called out in the code rather than hidden, because a header-based identity
-that looks like auth is worse than one that obviously is not.
+`licensing-verifier/`, the Spring service, is **not in the request path.** It holds the same
+verification rules over a JDBC datasource, it has tests, CI runs them, and nothing calls it.
+The seam it plugs into exists with one implementation, the direct connection the application
+uses today. [docs/07-architecture.md](docs/07-architecture.md) section 3 says what wiring it
+in would take.
+
+`X-Actor` is not authentication, and the deployment gate is not a user directory. Both are
+called out in the code and not hidden, because an identity that looks like auth is worse
+than one that obviously is not.
