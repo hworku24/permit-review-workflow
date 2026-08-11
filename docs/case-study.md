@@ -148,7 +148,7 @@ non-functional requirements, three open items with owners and deadlines. Every u
 acceptance criteria is written so it reads as a test case, because those became the tests.
 Every requirement traces to a design artifact, a module, and a named test.
 
-**Tested against a real database.** 368 Python tests and 20 Java tests, run in CI on every
+**Tested against a real database.** 383 Python tests and 20 Java tests, run in CI on every
 push against real Postgres instances. The database behaviour matters too much to fake: the
 business day functions, the append-only triggers, the partial unique indexes, and the
 reporting views are all things an in-memory substitute would let you get wrong.

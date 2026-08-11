@@ -394,7 +394,7 @@ either, apart from the restores that put configuration back where the seed left 
 ## Testing and CI
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m pytest        # 368 tests
+PYTHONPATH=. .venv/bin/python -m pytest        # 383 tests
 cd licensing-verifier && ./mvnw -B test        # 20 tests
 ```
 
@@ -455,7 +455,7 @@ corpus/             the zoning ordinance the retrieval layer reads
 deploy/aws/         container, task definition, refresh and teardown, cost
 docs/               requirements through architecture
 scripts/            seeding, reset, demo verification, deployment init
-tests/              368 tests against a real database
+tests/              383 tests against a real database
 licensing-verifier/ the Spring service, with its own suite
 ```
 
