@@ -59,6 +59,7 @@ and a named test in [docs/06-traceability.md](docs/06-traceability.md).
 ## How it fits together
 
 ```mermaid
+
 flowchart TB
     clerk["Intake clerk"]
     reviewer["Discipline reviewer"]
@@ -76,7 +77,8 @@ flowchart TB
     db[("PostgreSQL")]
     corpus[/"Zoning ordinance"/]
     county["County property records, SOAP"]
-    licensing["State licensing replica"]
+    verifier["Licensing verifier, Spring"]
+    licensing[("State licensing replica")]
 
     clerk --> ui
     reviewer --> ui
@@ -90,14 +92,17 @@ flowchart TB
     ai --> corpus
     ai -. "recommendations only" .-> db
     integ --> county
-    integ --> licensing
+    integ -- "direct, default" --> licensing
+    integ -- "http, optional" --> verifier
+    verifier -- "JDBC" --> licensing
     ui -. "reporting views" .-> db
 
     classDef person fill:#f2f4f6,stroke:#5c6470,color:#1a1d21
     classDef external fill:#fdf3e3,stroke:#8a5200,color:#8a5200
     classDef store fill:#e7edf4,stroke:#1f4e79,color:#1f4e79
     class clerk,reviewer,supervisor person
-    class county,licensing external
+    class county,verifier external
+    class licensing store
     class db,corpus store
 ```
 
@@ -452,12 +457,6 @@ licensing-verifier/ the Spring service, with its own suite
 Phase 1 is intake through issuance. Inspections, certificate of occupancy, fee calculation
 and payment, the public applicant portal, and appeals hearing management are all out of scope
 and listed as such in the requirements.
-
-`licensing-verifier/`, the Spring service, is **not in the request path.** It holds the same
-verification rules over a JDBC datasource, it has tests, CI runs them, and nothing calls it.
-The seam it plugs into exists with one implementation, the direct connection the application
-uses today. [docs/07-architecture.md](docs/07-architecture.md) section 3 says what wiring it
-in would take.
 
 `X-Actor` is not authentication, and the deployment gate is not a user directory. Both are
 called out in the code and not hidden, because an identity that looks like auth is worse

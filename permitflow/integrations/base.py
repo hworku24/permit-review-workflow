@@ -13,6 +13,7 @@ the lookup succeeded, and the case proceeds either way with the gap recorded.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -111,6 +112,9 @@ class ResiliencePolicy:
         return cls(**(defaults | overrides))
 
 
+logger = logging.getLogger(__name__)
+
+
 def log_call(
     *,
     system: str,
@@ -154,10 +158,17 @@ def log_call(
                         latency_ms,
                     ),
                 )
-    except Exception:
-        # Logging an attempt must never be the reason an integration fails. The call
-        # itself already succeeded or failed on its own merits.
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # Logging an attempt must never be the reason an integration fails. The call itself
+        # already succeeded or failed on its own merits.
+        #
+        # It must not be silent either. This swallowed a CHECK constraint violation once,
+        # when a new integration used a system name the column did not allow, and the only
+        # symptom was an attempt log with nothing in it. A dropped audit row that nobody is
+        # told about is the failure this table exists to prevent.
+        logger.warning(
+            "could not write the integration attempt log for %s/%s: %s", system, operation, exc
+        )
 
 
 def call_with_resilience(

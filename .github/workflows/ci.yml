@@ -58,6 +58,15 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # The parity test needs the Java service running, and it skips without one. A test
+      # that silently skips in CI is a test that is not protecting anything, so the service
+      # is built and started here.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -84,11 +93,35 @@ jobs:
           PGPASSWORD=dpor_admin psql -v ON_ERROR_STOP=1 -h localhost -p 5434 \
             -U dpor_admin -d licensing_replica -f sql/legacy/001_licensing.sql
 
+      - name: Start the licensing verifier
+        run: |
+          (cd licensing-verifier && ./mvnw -B -q package -DskipTests)
+          nohup java -jar licensing-verifier/target/*.jar > /tmp/verifier.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS -m 2 "http://localhost:8082/internal/licenses/VA-CL-004182/verification" >/dev/null 2>&1; then
+              echo "verifier up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "verifier did not start"; cat /tmp/verifier.log; exit 1
+        env:
+          LICENSING_DB_JDBC_URL: jdbc:postgresql://localhost:5434/licensing_replica
+          LICENSING_DB_USER: permitflow_ro
+          LICENSING_DB_PASSWORD: readonly
+
       - name: Lint
         run: ruff check .
 
       - name: Test
         run: pytest --cov=permitflow --cov-report=term-missing
+
+      - name: The parity test must have run, not skipped
+        run: |
+          pytest tests/test_licensing_parity.py -q --no-header -rs 2>&1 | tee /tmp/parity.txt
+          if grep -q "skipped" /tmp/parity.txt; then
+            echo "the licensing parity test skipped, which means the two backends were never compared"
+            exit 1
+          fi
 
       - name: Verify the ordinance corpus loads
         # Cheap guard against a corpus edit that breaks section parsing, which would make

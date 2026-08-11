@@ -221,3 +221,29 @@ class TestLicensing:
             row = cur.fetchone()
         assert row["license_status"] == "UNVERIFIED"
         assert row["last_verified_at"] is None
+
+
+class TestAttemptLogFailuresAreNotSilent:
+    """A dropped attempt log is the failure this table exists to prevent.
+
+    Writing the log must never break the call it describes, which is why the write is
+    wrapped. Wrapping it in a bare `pass` meant a CHECK constraint violation on a new
+    system name produced an empty log and no symptom at all.
+    """
+
+    def test_a_rejected_row_is_warned_about_and_does_not_raise(self, caplog) -> None:
+        from permitflow.integrations.base import log_call
+
+        with caplog.at_level("WARNING"):
+            # NOT_A_SYSTEM is not in the column's CHECK constraint, so this row is rejected.
+            log_call(system="NOT_A_SYSTEM", operation="x", attempt=1, status="SUCCESS")
+
+        assert any("could not write the integration attempt log" in r.message for r in caplog.records)
+
+    def test_a_good_row_still_lands(self, conn) -> None:
+        from permitflow.integrations.base import log_call
+
+        log_call(system="BUSINESS_LICENSING", operation="probe", attempt=1, status="SUCCESS")
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) AS n FROM integration_call WHERE operation = 'probe'")
+            assert cur.fetchone()["n"] == 1

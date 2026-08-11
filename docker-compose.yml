@@ -49,6 +49,24 @@ services:
       timeout: 3s
       retries: 20
 
+  # The Spring service that owns the JDBC datasource. Optional locally: the application
+  # defaults to the direct connection, and this is only reached when LICENSING_BACKEND=http.
+  # Started with the rest so the parity test has something to compare against.
+  licensing-verifier:
+    build:
+      context: ./licensing-verifier
+      dockerfile: Dockerfile
+    environment:
+      LICENSING_DB_JDBC_URL: jdbc:postgresql://licensing-db:5432/licensing_replica
+      LICENSING_DB_USER: permitflow_ro
+      LICENSING_DB_PASSWORD: readonly
+      TZ: America/New_York
+    ports:
+      - "8082:8082"
+    depends_on:
+      licensing-db:
+        condition: service_healthy
+
 volumes:
   permitflow_data:
   licensing_data:

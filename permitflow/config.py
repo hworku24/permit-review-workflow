@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     )
     licensing_db_timeout_seconds: float = 10.0
 
+    # "direct" opens the replica connection from this process. "http" asks the Spring
+    # service in licensing-verifier/, which owns the JDBC datasource. Direct is the default
+    # because a fresh clone has no Java service running, and NFR-06 says a clone runs with
+    # nothing beyond the compose stack.
+    licensing_backend: str = "direct"
+    licensing_service_url: str = "http://localhost:8082"
+
     property_records_wsdl: str = "http://localhost:8081/property-records?wsdl"
     property_records_timeout_seconds: float = 10.0
 

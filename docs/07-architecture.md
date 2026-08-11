@@ -28,7 +28,8 @@ flowchart TB
     db[("PostgreSQL")]
     corpus[/"Zoning ordinance"/]
     county["County property records, SOAP"]
-    licensing["State licensing replica"]
+    verifier["Licensing verifier, Spring"]
+    licensing[("State licensing replica")]
 
     clerk --> ui
     reviewer --> ui
@@ -42,14 +43,17 @@ flowchart TB
     ai --> corpus
     ai -. "recommendations only" .-> db
     integ --> county
-    integ --> licensing
+    integ -- "direct, default" --> licensing
+    integ -- "http, optional" --> verifier
+    verifier -- "JDBC" --> licensing
     ui -. "reporting views" .-> db
 
     classDef person fill:#f2f4f6,stroke:#5c6470,color:#1a1d21
     classDef external fill:#fdf3e3,stroke:#8a5200,color:#8a5200
     classDef store fill:#e7edf4,stroke:#1f4e79,color:#1f4e79
     class clerk,reviewer,supervisor person
-    class county,licensing external
+    class county,verifier external
+    class licensing store
     class db,corpus store
 ```
 
@@ -137,17 +141,25 @@ by convention:
 The last row is the one worth checking on the console. There is no address on the internet
 that can open a connection to the database, because no address appears in its rules.
 
-## 3. What is not in either picture
+## 3. Two ways to reach the licensing data
 
-**`licensing-verifier/`, the Spring service, is not in the request path.** It holds the same
-verification rules over a JDBC datasource, it has its own tests, and CI runs them. Nothing
-calls it. The seam it would plug into exists (`LicensingBackend` in
-`permitflow/integrations/licensing.py`) and has one implementation, the direct connection
-the application uses today.
+`LicensingBackend` has two implementations and `LICENSING_BACKEND` chooses between them.
+`direct` opens the replica connection from this process. `http` asks the Spring service in
+`licensing-verifier/`, which owns the JDBC datasource and holds the same rules.
 
-It is drawn nowhere above because drawing it would say something untrue about how a request
-flows. Wiring it in means an HTTP backend behind that seam, a parity test driving both
-implementations over the same replica rows, and a third container in the task definition.
+The second is what a jurisdiction usually ends up with, because the credential the state
+issues belongs to one service and not to every application that wants an answer. The first
+is the default, because a fresh clone has no Java service running and NFR-06 says a clone
+runs with nothing beyond the compose stack.
+
+Two implementations of one rule is a real risk of the same kind as the business day
+arithmetic. `tests/test_licensing_parity.py` drives both over the same replica rows and
+compares field by field, and CI fails if that test skips, because a parity test that
+silently does not run is not protecting anything. It earned its keep on the first run: the
+Java controller trimmed the licence number and the Python client did not, so a padded number
+found the licence through the service and found nothing through the direct connection.
+
+## 4. What is not in either picture
 
 **The applicant portal.** Applicants are external and have no screen here. Phase 1 is intake
 through issuance for department staff, and `docs/01-requirements.md` says so.

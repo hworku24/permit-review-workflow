@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
+import httpx
 import psycopg
 
 from ..config import get_settings
@@ -92,6 +93,13 @@ class LicensingClient:
         self.policy = policy or ResiliencePolicy.from_settings()
 
     def _query(self, license_number: str) -> dict | None:
+        # Trimmed before it reaches the query. The replica stores the number in a char(12)
+        # column, so anything read back out of it arrives padded, and a caller passing that
+        # straight back in is the normal case and not a mistake. The Java service trims too,
+        # and tests/test_licensing_parity.py is what caught them disagreeing about it: the
+        # padded number found the licence through the service and found nothing here.
+        license_number = license_number.strip()
+
         # Short-lived connection rather than a pool. Intake lookups are infrequent and a
         # pooled connection to someone else's replica is a connection held open against a
         # system Rivermont does not operate.
@@ -167,7 +175,7 @@ class LicensingClient:
         outcome = self.verify(license_number, application_id=application_id)
         status, effect, message = intake_effect(outcome, as_of=as_of)
         return Verification(
-            license_number=license_number,
+            license_number=license_number.strip(),
             verified=outcome.verified,
             status=status,
             effect=effect,
@@ -295,12 +303,122 @@ class LicensingBackend(Protocol):
     def verification(self, license_number: str, as_of: date | None = None, application_id: UUID | None = None) -> Verification: ...
 
 
+#: The same external system as the direct connection, reached a different way. Logging it
+#: under one name is what keeps "how often was licensing unreachable" from splitting in two
+#: depending on which backend was configured. The operation column tells the routes apart.
+SERVICE_SYSTEM = SYSTEM
+SERVICE_OPERATION = "GET /internal/licenses/{number}/verification"
+
+
+def _http_retryable(exc: Exception) -> bool:
+    """A connection problem or a 5xx is worth retrying. A 4xx is not.
+
+    The service answers 200 even when the replica behind it is down, carrying the outcome
+    in `verified`, so a non-200 means the service itself is in trouble and not that the
+    licence is bad.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.TransportError, OSError))
+
+
+def _http_classify(exc: Exception) -> str:
+    if isinstance(exc, httpx.TimeoutException):
+        return "TIMEOUT"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return "ERROR"
+    return "ERROR"
+
+
+class HttpLicensingBackend:
+    """Reaches the state's data through the Spring service in `licensing-verifier/`.
+
+    That service owns the JDBC datasource and holds the same verification rules. This is
+    the arrangement a jurisdiction usually ends up with, because the credential the state
+    issues belongs to one service and not to every application that wants an answer.
+
+    The rules exist twice, once here in Python and once in Java, which is a real risk of the
+    same kind as the business day arithmetic. `tests/test_licensing_parity.py` drives both
+    backends over the same replica rows and fails if they ever disagree.
+    """
+
+    name = "http"
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        policy: ResiliencePolicy | None = None,
+    ) -> None:
+        settings = get_settings()
+        self.base_url = (base_url or settings.licensing_service_url).rstrip("/")
+        self.timeout = timeout or settings.licensing_db_timeout_seconds
+        self.policy = policy or ResiliencePolicy.from_settings()
+
+    def _get(self, license_number: str, as_of: date | None) -> dict:
+        params = {"asOf": as_of.isoformat()} if as_of else None
+        url = f"{self.base_url}/internal/licenses/{license_number.strip()}/verification"
+        response = httpx.get(url, params=params, timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def verification(
+        self,
+        license_number: str,
+        as_of: date | None = None,
+        application_id: UUID | None = None,
+    ) -> Verification:
+        """Ask the service, and degrade to UNVERIFIED if it cannot answer.
+
+        A service that is down is a different fact from a licence that is revoked, and the
+        caller is told which happened. Reaching the service and being told the licence is
+        revoked is a verified answer; failing to reach it is not.
+        """
+        try:
+            payload = call_with_resilience(
+                system=SERVICE_SYSTEM,
+                operation=SERVICE_OPERATION,
+                fn=lambda: self._get(license_number, as_of),
+                policy=self.policy,
+                is_retryable=_http_retryable,
+                classify=_http_classify,
+                application_id=application_id,
+                request_payload={"license_number": license_number},
+                response_summary=lambda r: {"status": r.get("status"), "verified": r.get("verified")},
+            )
+        except Exception as exc:  # noqa: BLE001 - degrade, per NFR-02
+            return Verification(
+                license_number=license_number,
+                verified=False,
+                status=LicenseStatus.UNVERIFIED,
+                effect=IntakeEffect.RAISE_DEFICIENCY,
+                message=f"licensing service unreachable: {str(exc)[:200]}",
+            )
+
+        expires = payload.get("expiresOn")
+        return Verification(
+            license_number=payload.get("licenseNumber", license_number).strip(),
+            verified=bool(payload.get("verified")),
+            status=LicenseStatus(payload["status"]),
+            effect=IntakeEffect(payload["effect"]),
+            message=payload.get("message") or "",
+            business_name=(payload.get("businessName") or None),
+            expires_on=date.fromisoformat(expires) if expires else None,
+        )
+
+
 def get_licensing_backend() -> LicensingBackend:
     """The backend intake uses when a caller does not pass one.
 
-    A function rather than a module-level instance, so settings are read at call time and
-    a test can substitute a backend without touching import order.
+    A function and not a module-level instance, so settings are read at call time and a
+    test can substitute a backend without touching import order.
+
+    `LICENSING_BACKEND=http` routes through the Spring service. The default stays direct,
+    because a fresh clone has no Java service running and NFR-06 says a clone runs with
+    nothing installed beyond the compose stack.
     """
+    if get_settings().licensing_backend == "http":
+        return HttpLicensingBackend()
     return LicensingClient()
 
 
