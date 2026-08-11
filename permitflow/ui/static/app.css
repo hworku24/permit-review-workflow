@@ -201,3 +201,45 @@ td.evidence { color: var(--muted); font-style: italic; }
 .decision .actions { margin-top: 0.8rem; display: flex; gap: 0.6rem; }
 button.secondary { background: #fff; color: var(--accent); }
 button.secondary:hover { background: #eef2f6; }
+
+/* Ordinance */
+
+.ask { display: flex; gap: 0.5rem; margin: 1rem 0 0; }
+.ask input[type="text"] {
+  font: inherit;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  flex: 1 1 auto;
+  max-width: 40rem;
+}
+.examples { margin: 0.3rem 0 0; padding-left: 1.1rem; font-size: 0.9rem; }
+.examples li { margin: 0.2rem 0; }
+
+.citation { padding: 0.9rem 0; border-top: 1px solid var(--line); }
+.citation:first-of-type { border-top: none; }
+.citation-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+.section-id { font-weight: 700; }
+.section-title { color: var(--muted); }
+.relevance { margin-left: auto; color: var(--muted); font-size: 0.82rem; }
+
+.quote {
+  margin: 0.5rem 0 0;
+  padding: 0.7rem 0.9rem;
+  background: #f7f9fb;
+  border-left: 3px solid var(--accent);
+  font-size: 0.95rem;
+}
+.provision {
+  margin: 0.5rem 0 0;
+  padding: 0.7rem 0.9rem;
+  background: #fafbfc;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  overflow-x: auto;
+}
+details summary { cursor: pointer; font-size: 0.88rem; color: var(--accent); margin-top: 0.5rem; }
+.banner.failure { background: var(--breach-bg); border-left-color: var(--breach); color: var(--breach); }
+.crumb .sep { color: var(--line); margin: 0 0.4rem; }

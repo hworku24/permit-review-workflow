@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Ordinance{% endblock %}
+
+{% block content %}
+{% if case_id %}
+<p class="crumb"><a href="/ui/case/{{ case_id }}">Back to the case</a></p>
+{% else %}
+<p class="crumb"><a href="/ui/queue">My queue</a></p>
+{% endif %}
+
+<div class="panel">
+  <h1>Ask the zoning ordinance</h1>
+  <p class="summary">
+    Title 59, {{ corpus_size }} sections. Answers are the ordinance's own words. Nothing
+    on this page is written by a model.
+  </p>
+
+  <form method="get" action="/ui/ordinance" class="ask">
+    {% if case_id %}<input type="hidden" name="case" value="{{ case_id }}">{% endif %}
+    <input type="text" name="q" value="{{ question }}" size="70"
+           placeholder="What is the rear setback in R-90?" autofocus>
+    <button type="submit">Ask</button>
+  </form>
+
+  {% if not question %}
+  <p class="note">Try one of these:</p>
+  <ul class="examples">
+    {% for example in examples %}
+    <li>
+      <a href="/ui/ordinance?q={{ example|urlencode }}{% if case_id %}&case={{ case_id }}{% endif %}">
+        {{ example }}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+
+{% if verification_error %}
+<div class="panel">
+  <h2>Answer withheld</h2>
+  <p class="banner failure">
+    A quote did not appear byte for byte in the corpus, so the answer was discarded and
+    not shown. Nothing from it reached this page.
+  </p>
+  <p class="note"><code>{{ verification_error }}</code></p>
+  <p class="note">
+    This check exists so that a later change letting a model rewrite a quote fails loudly
+    here, and does not quietly put words in the ordinance's mouth.
+  </p>
+</div>
+{% endif %}
+
+{% if answer and not answer.answered %}
+<div class="panel">
+  <h2>No answer in the ordinance</h2>
+  <p class="banner">{{ answer.withheld_reason }}</p>
+  <p class="note">
+    Sections considered: {{ answer.considered|join(', ') or 'none' }}. An ungrounded answer
+    to a code question is how a permit gets wrongly issued, so the question comes back
+    unanswered and the reviewer reads the code.
+  </p>
+</div>
+{% endif %}
+
+{% if answer and answer.answered %}
+<div class="panel">
+  <h2>{{ answer.citations|length }} provision{{ '' if answer.citations|length == 1 else 's' }}</h2>
+  <p class="note">
+    Every quote below was verified against the corpus before this page rendered. Retrieval
+    returned a section number, code read the text back out by that number, and the quote was
+    checked byte for byte.
+  </p>
+
+  {% for citation in answer.citations %}
+  <div class="citation">
+    <div class="citation-head">
+      <span class="section-id">{{ citation.section_id }}</span>
+      <span class="section-title">{{ citation.title }}</span>
+      <span class="relevance">relevance {{ '%.2f'|format(citation.relevance) }}</span>
+    </div>
+
+    <blockquote class="quote">{{ citation.display_quote }}</blockquote>
+
+    <p class="note">{{ citation.source }}. {{ citation.reason }}</p>
+
+    {% if sections.get(citation.section_id) %}
+    <details>
+      <summary>Read the whole provision</summary>
+      <pre class="provision">{{ sections[citation.section_id] }}</pre>
+    </details>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% if answer.considered %}
+  <p class="note">Sections considered: {{ answer.considered|join(', ') }}.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

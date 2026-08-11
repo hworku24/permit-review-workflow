@@ -4,7 +4,11 @@
 {% macro ts(value) %}{{ value.strftime('%d %b %Y %H:%M') if value else 'not set' }}{% endmacro %}
 
 {% block content %}
-<p class="crumb"><a href="/ui/queue">My queue</a></p>
+<p class="crumb">
+  <a href="/ui/queue">My queue</a>
+  <span class="sep">|</span>
+  <a href="/ui/ordinance?case={{ case.application_id }}">Ask the ordinance</a>
+</p>
 
 <div class="panel">
   <div class="case-head">

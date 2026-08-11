@@ -49,6 +49,11 @@ licensing replica. The schema, views, and reference data load automatically.
 
 Then open `http://localhost:8000/ui/` for the staff screens, or `/docs` for the API.
 
+Four screens so far: a reviewer's queue sorted by what is most at risk, a case record
+holding the parts of a case that live in eleven tables, the intake triage screen with what
+the model drafted next to what it held back, and an ordinance question screen that answers
+in the ordinance's own words or declines.
+
 Start the mock county SOAP service and the API:
 
 ```bash
@@ -66,11 +71,12 @@ database down to the application numbers:
 PYTHONPATH=.:scripts .venv/bin/python scripts/seed_demo.py
 ```
 
-It clears any existing case data, generates a year of history, and adds five cases parked
-in the states worth looking at: one issued with a clean review, one under review with four
+It clears any existing case data, generates a year of history, and adds six cases parked in
+the states worth looking at: one issued with a clean review, one under review with four
 disciplines open, one returned to the applicant with the clock paused, one open for four
-months and past its allowance, and one where the licensing replica was unreachable at
-intake. It prints their application numbers at the end.
+months and past its allowance, one where the licensing replica was unreachable at intake,
+and one whose narrative is vague enough that three fields come back below the confidence
+threshold. It prints their application numbers at the end.
 
 The history is worked backwards from the run date, so the newest cases are days old and the
 last-30-days columns on the reports have something in them. Pass `--today` to pin the run
@@ -121,7 +127,7 @@ Run the tests:
 PYTHONPATH=. .venv/bin/python -m pytest
 ```
 
-233 tests, against a real Postgres. The database behaviour matters too much to fake: the
+287 tests, against a real Postgres. The database behaviour matters too much to fake: the
 business day functions, the append-only audit triggers, the partial unique indexes, and the
 reporting views are all things a substitute would let me get wrong.
 
@@ -285,7 +291,7 @@ sql/                schema, reporting views, reference data, legacy licensing sc
 corpus/             the zoning ordinance the retrieval layer reads
 docs/               requirements through traceability
 scripts/            case history generator, demo builder, reset, demo verification
-tests/              233 tests against a real database
+tests/              287 tests against a real database
 ```
 
 ## Scope

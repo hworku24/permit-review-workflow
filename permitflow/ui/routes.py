@@ -14,7 +14,8 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from ..ai import recording
+from ..ai import rag, recording
+from ..ai.retrieval import load_index
 from ..config import get_settings
 from ..db import read_connection, transaction
 from ..process.states import Role
@@ -463,3 +464,71 @@ def decide_triage(
         )
 
     return RedirectResponse(url=f"/ui/case/{application_id}/triage", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Ordinance questions
+# ---------------------------------------------------------------------------
+
+#: Offered on the empty screen. The last one is there deliberately: the ordinance says
+#: nothing about helipads, and the answer a reviewer should get is that it says nothing.
+EXAMPLE_QUESTIONS = [
+    "What is the rear setback in R-90?",
+    "When is a stormwater management plan required?",
+    "What is the maximum building height in C-2?",
+    "How many parking spaces does a helipad require?",
+]
+
+
+@router.get("/ordinance", response_class=HTMLResponse)
+def ordinance(request: Request, q: str = "", case: str = ""):
+    """Ask the zoning ordinance a question and get its own words back.
+
+    The model never writes the quote. Retrieval returns a section number, code reads the
+    text back out of the corpus by that number, and `rag.verify` asserts the quote appears
+    byte for byte in the source before any of it reaches this page. A verification failure
+    withholds the answer here, and does not show it with a warning attached, because a
+    quote that cannot be found in the ordinance is not a quote.
+    """
+    try:
+        actor = current_actor(request)
+    except NotSignedIn:
+        return to_picker(request)
+
+    answer = None
+    sections: dict[str, str] = {}
+    verification_error = None
+    question = q.strip()
+
+    if question:
+        index = load_index()
+        try:
+            # answer_question verifies before it returns, so the failure surfaces here.
+            # Catching it at the screen turns an assertion into a withheld answer, and not
+            # a 500 in front of a reviewer.
+            answer = rag.answer_question(question, index=index)
+        except AssertionError as exc:
+            verification_error = str(exc)
+            answer = None
+        else:
+            # The full provision each quote was taken from, so a reviewer can read the
+            # quote in its context and not take the system's word for the boundaries.
+            for citation in answer.citations:
+                section = index.by_id(citation.section_id)
+                if section is not None:
+                    sections[citation.section_id] = section.text
+
+    return TEMPLATES.TemplateResponse(
+        request=request,
+        name="ordinance.html",
+        context={
+            "actor": actor,
+            "question": question,
+            "answer": answer,
+            "sections": sections,
+            "verification_error": verification_error,
+            "examples": EXAMPLE_QUESTIONS,
+            "case_id": case,
+            "corpus_size": len(load_index()),
+        },
+    )
