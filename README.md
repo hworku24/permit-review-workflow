@@ -35,6 +35,18 @@ A few examples of what that looks like in practice:
   applications, the department has converted somebody else's outage into its own service
   failure, and the front desk takes the calls.
 
+## Live
+
+The deployed demonstration runs at **https://d2z5bkq0t31r0m.cloudfront.net** behind one
+shared passphrase. It is one Fargate task behind a load balancer with CloudFront in front
+for HTTPS, and a small managed Postgres nothing on the internet can open a connection to.
+See [deploy/aws/README.md](deploy/aws/README.md) for what it costs, what each hop can reach,
+and the things it deliberately does not do.
+
+The sign-in there is a gate on a public address, not the city's single sign-on, and the page
+says so. Behind it the user picker still chooses which member of staff you are acting as,
+because the authorization worth demonstrating is the engine's.
+
 ## Running it
 
 Postgres and Docker are the only prerequisites. Nothing here needs an API key or an account.

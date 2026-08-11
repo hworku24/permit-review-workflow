@@ -25,7 +25,11 @@ def sla_compliance(actor: CurrentActor, permit_type_code: str | None = None) -> 
                    decided_count, met_count, compliance_pct,
                    mean_net_days, median_net_days, p90_net_days
             FROM v_sla_compliance
-            WHERE (%s IS NULL OR permit_type_code = %s)
+            -- Cast both, because Postgres cannot infer the type of a parameter that only
+            -- ever appears in an IS NULL test, and the failure is a 500 that only happens
+            -- when the filter is omitted. Found on the deployed instance, not locally,
+            -- because nothing here was under test.
+            WHERE (%s::text IS NULL OR permit_type_code = %s::text)
             ORDER BY decided_month DESC, permit_type_code
             """,
             (permit_type_code, permit_type_code),

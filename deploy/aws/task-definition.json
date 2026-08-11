@@ -1,0 +1,90 @@
+{
+  "family": "permitflow",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::559037158320:role/permitflowTaskExecution",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "559037158320.dkr.ecr.us-east-1.amazonaws.com/permitflow:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "AI_PROVIDER",
+          "value": "offline"
+        },
+        {
+          "name": "PROPERTY_RECORDS_WSDL",
+          "value": "http://localhost:8081/property-records?wsdl"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "PERMITFLOW_DB_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:559037158320:secret:permitflow/db-url-NatG7A"
+        },
+        {
+          "name": "DEMO_PASSPHRASE",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:559037158320:secret:permitflow/demo-passphrase-uynCWM"
+        },
+        {
+          "name": "SESSION_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:559037158320:secret:permitflow/session-secret-46IwSe"
+        },
+        {
+          "name": "LICENSING_DB_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:559037158320:secret:permitflow/licensing-db-url-1YnShz"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/permitflow",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "api"
+        }
+      }
+    },
+    {
+      "name": "soap-mock",
+      "image": "559037158320.dkr.ecr.us-east-1.amazonaws.com/permitflow:latest",
+      "essential": false,
+      "command": [
+        "uvicorn",
+        "permitflow.integrations.soap_mock.server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8081"
+      ],
+      "portMappings": [
+        {
+          "containerPort": 8081,
+          "protocol": "tcp"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/permitflow",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "soap"
+        }
+      }
+    }
+  ]
+}

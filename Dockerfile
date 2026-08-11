@@ -55,7 +55,7 @@ USER permitflow
 EXPOSE 8000
 
 # /health reports the database and the ordinance corpus separately, so a container that is
-# up but cannot reach its database fails the check rather than serving errors.
+# up but cannot reach its database fails the check and does not sit there serving errors.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://localhost:8000/health | grep -q '"status":"ok"' || exit 1
 
