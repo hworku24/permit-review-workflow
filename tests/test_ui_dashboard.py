@@ -42,7 +42,7 @@ class TestEmptyDatabase:
         response = api_client.get("/ui/dashboard")
         assert response.status_code == 200
         body = text_of(response.text)
-        assert "Nothing decided yet" in body
+        assert "No cases were decided in this range" in body
         assert "Nothing escalated and unacknowledged" in body
 
     def test_every_configured_discipline_is_listed_even_with_no_work(self, api_client) -> None:
@@ -134,3 +134,87 @@ class TestNavigation:
     def test_the_queue_links_to_the_dashboard(self, api_client) -> None:
         signed_in(api_client, "pvasquez")
         assert 'href="/ui/dashboard"' in api_client.get("/ui/queue").text
+
+
+class TestDateFilter:
+    """The range applies to decided cases. Current state deliberately ignores it."""
+
+    def test_the_default_range_is_the_last_twelve_months(self, api_client, decided_cases) -> None:
+        signed_in(api_client)
+        body = text_of(api_client.get("/ui/dashboard").text)
+        assert "Showing decided cases from last 12 months" in body
+
+    def test_a_preset_narrows_the_range(self, api_client, decided_cases) -> None:
+        signed_in(api_client)
+        body = text_of(api_client.get("/ui/dashboard", params={"preset": "3m"}).text)
+        assert "Showing decided cases from last 3 months" in body
+
+    def test_last_three_months_means_three_calendar_months(self, api_client) -> None:
+        """Counted in months, not in 31 day chunks, which is what made the window four."""
+        from datetime import date
+
+        from permitflow.ui.routes import _resolve_range
+
+        start, end, _label = _resolve_range("3m", "", "")
+        today = date.today()
+        expected_index = today.year * 12 + (today.month - 1) - 2
+        assert start == date(expected_index // 12, expected_index % 12 + 1, 1)
+        assert end is None
+
+    def test_explicit_dates_win_over_a_preset(self, api_client, decided_cases) -> None:
+        signed_in(api_client)
+        body = text_of(
+            api_client.get(
+                "/ui/dashboard", params={"preset": "3m", "start": "2020-01-01", "end": "2020-12-31"}
+            ).text
+        )
+        assert "2020-01-01 to 2020-12-31" in body
+        assert "No cases were decided in this range" in body
+
+    def test_an_unparseable_date_falls_back_and_does_not_error(self, api_client) -> None:
+        """A dashboard that 500s on a typo in the address bar is worse than one that does not."""
+        signed_in(api_client)
+        response = api_client.get("/ui/dashboard", params={"start": "not-a-date"})
+        assert response.status_code == 200
+        assert "last 12 months" in text_of(response.text)
+
+    def test_a_filtered_range_matches_the_same_query_against_the_view(
+        self, api_client, decided_cases
+    ) -> None:
+        """The checklist item, done literally: page numbers against SQL with the same bounds."""
+        from datetime import date
+
+        from permitflow.ui.routes import _resolve_range
+
+        start, _end, _label = _resolve_range("6m", "", "")
+        with read_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT sum(decided_count) AS decided, sum(met_count) AS met,
+                          round(100.0*sum(met_count)/nullif(sum(decided_count),0),1) AS pct
+                   FROM v_sla_compliance
+                   WHERE decided_month >= date_trunc('month', %s::date)""",
+                (start,),
+            )
+            expected = cur.fetchone()
+        assert isinstance(start, date)
+
+        signed_in(api_client)
+        body = text_of(api_client.get("/ui/dashboard", params={"preset": "6m"}).text)
+        assert f"{expected['met']} of {expected['decided']} decided" in body
+        assert f"{expected['pct']}%" in body
+
+    def test_current_state_panels_ignore_the_range(self, api_client, overdue_task) -> None:
+        """An escalation raised today still shows under a range that ended in 2020."""
+        from permitflow.db import transaction
+        from permitflow.process import escalation
+
+        with transaction() as conn:
+            escalation.sweep(conn)
+
+        signed_in(api_client)
+        html = api_client.get(
+            "/ui/dashboard", params={"start": "2020-01-01", "end": "2020-12-31"}
+        ).text
+        assert "BREACH" in html
+        assert f'/ui/case/{overdue_task["application_id"]}' in html
+        assert "current state" in text_of(html)

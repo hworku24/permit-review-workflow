@@ -116,8 +116,8 @@ def _parties(conn, *, slot: int, name: str, business: str, license_number: str, 
     """One applicant, parcel, and contractor for a demo case.
 
     The APN is one the county mock actually holds, so intake makes a real SOAP call and
-    the address and zoning on the page come back from the county rather than from here.
-    The placeholder values below are what an applicant types; the county overwrites them.
+    the address and zoning on the page come back from the county, not from here. The
+    placeholder values below are what an applicant types; the county overwrites them.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -414,10 +414,13 @@ def main() -> None:
     # Two runs on the same day still produce the same database; --today pins it further.
     span_days = int(args.cases * 2.4) + HISTORY_TAIL_DAYS
     start = _at(args.today, span_days, hour=9)
+    # Nothing is allowed to happen after the run date. Cases whose review would run past it
+    # stop where they are, which is what leaves recent work genuinely in flight.
+    edge = _at(args.today, 0, hour=17)
     for index in range(args.cases):
         clock = seed_cases.Clock(start + timedelta(days=index * 2.4, hours=rng.randint(0, 6)))
         with transaction() as conn:
-            summary = seed_cases.seed_one(conn, clock, rng, index)
+            summary = seed_cases.seed_one(conn, clock, rng, index, not_after=edge)
         if not args.quiet:
             print(f"  {summary}")
     print(f"\nSeeded {args.cases} cases of history, {start.date()} to about {args.today}.")

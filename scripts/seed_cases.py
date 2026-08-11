@@ -176,8 +176,21 @@ def _open_tasks(conn, application_id: UUID) -> list[dict]:
         return cur.fetchall()
 
 
-def seed_one(conn, clock: Clock, rng: random.Random, index: int) -> str:
-    """Drive one application from creation to a decision."""
+def seed_one(
+    conn, clock: Clock, rng: random.Random, index: int, not_after: datetime | None = None
+) -> str:
+    """Drive one application from creation towards a decision.
+
+    `not_after` stops the case wherever it has got to once its clock passes that moment.
+    Without it the newest submissions run their full review past the run date and the
+    department ends up having issued permits six weeks into the future, which is both wrong
+    and the kind of thing somebody notices on a dashboard. Stopping instead leaves recent
+    cases genuinely in flight, which is what a real queue looks like.
+    """
+
+    def past_the_edge() -> bool:
+        return not_after is not None and clock.now > not_after
+
     permit_type, template, value_range, sf_range = rng.choice(SCENARIOS)
     parties = _make_parties(conn, rng, index)
 
@@ -227,11 +240,15 @@ def seed_one(conn, clock: Clock, rng: random.Random, index: int) -> str:
         )
 
     clock.advance_business_days(rng.randint(1, 3), rng)
+    if past_the_edge():
+        return _describe(conn, application_id, permit_type, "AT SCREENING")
     additions = ["ENVIRONMENTAL"] if "stormwater" in narrative else []
     engine.accept_intake(application_id, clerk, confirmed_additional_disciplines=additions)
 
     # Round one.
     clock.advance_business_days(rng.randint(4, 16), rng)
+    if past_the_edge():
+        return _describe(conn, application_id, permit_type, "IN REVIEW")
     deficient = False
     for task in _open_tasks(conn, application_id):
         actor = _reviewer_actor(conn, task["id"])
@@ -257,6 +274,8 @@ def seed_one(conn, clock: Clock, rng: random.Random, index: int) -> str:
     # Round two, if anyone found something.
     if deficient:
         clock.advance_business_days(rng.randint(4, 25), rng)  # applicant time, clock paused
+        if past_the_edge():
+            return _describe(conn, application_id, permit_type, "WITH APPLICANT")
         engine.resubmit(application_id, applicant)
         clock.advance_business_days(rng.randint(3, 12), rng)
         for task in _open_tasks(conn, application_id):
@@ -265,6 +284,8 @@ def seed_one(conn, clock: Clock, rng: random.Random, index: int) -> str:
             engine.approve_task(task["id"], actor)
 
     clock.advance_business_days(rng.randint(1, 4), rng)
+    if past_the_edge():
+        return _describe(conn, application_id, permit_type, "AWAITING DECISION")
     if rng.random() < 0.06:
         engine.deny(
             application_id,
@@ -276,6 +297,10 @@ def seed_one(conn, clock: Clock, rng: random.Random, index: int) -> str:
         engine.issue(application_id, SUPERVISOR)
         outcome = "ISSUED"
 
+    return _describe(conn, application_id, permit_type, outcome)
+
+
+def _describe(conn, application_id: UUID, permit_type: str, outcome: str) -> str:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT application_number FROM application WHERE id=%s", (str(application_id),)
@@ -322,13 +347,15 @@ def main() -> None:
 
     rng = random.Random(args.seed)
     start = datetime.fromisoformat(args.start).replace(hour=9, tzinfo=DEPARTMENT_TZ)
+    # No case may be carried past now, so a run never issues a permit in the future.
+    edge = datetime.now(DEPARTMENT_TZ)
 
     for index in range(args.cases):
         # Each case gets its own clock starting a little after the last, so submissions
         # are spread across the year and do not all arrive in one burst.
         clock = Clock(start + timedelta(days=index * 2.4, hours=rng.randint(0, 6)))
         with transaction() as conn:
-            summary = seed_one(conn, clock, rng, index)
+            summary = seed_one(conn, clock, rng, index, not_after=edge)
         if not args.quiet:
             print(f"  {summary}")
 

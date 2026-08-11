@@ -305,3 +305,44 @@ details summary { cursor: pointer; font-size: 0.88rem; color: var(--accent); mar
 .meter-fill.ok { background: var(--ok); }
 .meter-fill.low { background: var(--breach); }
 td.num.sla-breached { color: var(--breach); font-weight: 600; background: none; }
+
+/* Dashboard filters */
+
+.filters {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+.presets { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.chip {
+  display: inline-block;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  text-decoration: none;
+  color: var(--accent);
+  background: #fff;
+}
+.chip:hover { background: #eef2f6; }
+.chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.range { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+.range label { color: var(--muted); }
+.range input[type="date"] {
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+.scope {
+  font-size: 0.72rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-left: 0.5rem;
+}

@@ -7,6 +7,7 @@ piece of SQL and cannot drift.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from uuid import UUID
 
@@ -538,13 +539,64 @@ def ordinance(request: Request, q: str = "", case: str = ""):
 # Supervisor dashboard
 # ---------------------------------------------------------------------------
 
-def _headline(conn) -> dict:
-    """The four numbers a department director is actually accountable for.
+#: Quick ranges offered above the dashboard. Months back from today, or None for all time.
+DASHBOARD_PRESETS = [
+    ("3m", "Last 3 months", 3),
+    ("6m", "Last 6 months", 6),
+    ("12m", "Last 12 months", 12),
+    ("all", "All time", None),
+]
 
-    Read from the same views the per-month tables read, so the summary at the top of the
-    page and the rows below it cannot disagree. Computing the headline separately in
-    Python is how a dashboard ends up contradicting itself.
+DEFAULT_PRESET = "12m"
+
+
+def _resolve_range(preset: str, start: str, end: str) -> tuple[date | None, date | None, str]:
+    """Turn the query string into two bounds and a label a person can read.
+
+    Explicit dates win over a preset, so a link someone pasted keeps meaning what it meant.
+    An unparseable date falls back to the default range: a dashboard that 500s on a typo in
+    the address bar is worse than one that quietly shows the usual year.
     """
+    parsed_start = _as_date(start)
+    parsed_end = _as_date(end)
+    if parsed_start or parsed_end:
+        label = f"{parsed_start or 'the beginning'} to {parsed_end or 'today'}"
+        return parsed_start, parsed_end, label
+
+    chosen = preset if preset in {key for key, _, _ in DASHBOARD_PRESETS} else DEFAULT_PRESET
+    for key, text, months in DASHBOARD_PRESETS:
+        if key == chosen:
+            if months is None:
+                return None, None, text.lower()
+            # Counted in calendar months, not in 31 day chunks, which is what a department
+            # means by "the last three months" and also what stops the window being four.
+            # Anchored to the first of the month so a partial month at the edge does not
+            # drag the rate down with cases that have not been decided yet.
+            today = date.today()
+            index = today.year * 12 + (today.month - 1) - (months - 1)
+            first = date(index // 12, index % 12 + 1, 1)
+            return first, None, text.lower()
+    return None, None, "all time"
+
+
+def _as_date(raw: str) -> date | None:
+    try:
+        return date.fromisoformat(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def _headline(conn, start: date | None, end: date | None) -> dict:
+    """The four numbers a department director is accountable for.
+
+    Read from the same views the per-month tables read, with the same bounds, so the
+    summary at the top of the page and the rows below it cannot disagree. Computing the
+    headline separately in Python is how a dashboard ends up contradicting itself.
+
+    Open cases deliberately ignore the range. "How many are open" is a question about now,
+    and filtering it by a decided-date window produces a number nobody can interpret.
+    """
+    bounds = {"start": start, "end": end}
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -553,7 +605,10 @@ def _headline(conn) -> dict:
                    round(100.0 * sum(met_count) / nullif(sum(decided_count), 0), 1)
                                                                         AS compliance_pct
             FROM v_sla_compliance
-            """
+            WHERE (%(start)s::date IS NULL OR decided_month >= date_trunc('month', %(start)s::date))
+              AND (%(end)s::date   IS NULL OR decided_month <= date_trunc('month', %(end)s::date))
+            """,
+            bounds,
         )
         compliance = cur.fetchone()
 
@@ -568,7 +623,10 @@ def _headline(conn) -> dict:
                    count(*)                                    AS decided
             FROM v_cycle_time
             WHERE decided_at IS NOT NULL
-            """
+              AND (%(start)s::date IS NULL OR decided_at >= %(start)s::date)
+              AND (%(end)s::date   IS NULL OR decided_at < %(end)s::date + 1)
+            """,
+            bounds,
         )
         cycle = cur.fetchone()
 
@@ -586,20 +644,32 @@ def _headline(conn) -> dict:
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
-def dashboard(request: Request):
+def dashboard(
+    request: Request,
+    preset: str = DEFAULT_PRESET,
+    start: str = "",
+    end: str = "",
+):
     """Where the department stands: compliance, cycle time, workload, and what is stuck.
 
     Every panel is a thin read over a view. The arithmetic stays in SQL because the
     compliance figure goes to the city council, and a number recomputed in application
     code is a number that will eventually disagree with the report it came from.
+
+    The range applies to decided cases only. Workload, disciplines, and escalations are
+    current state, and are labelled as such on the page. A period filter silently applied
+    to "what is open right now" produces a number that reads as an answer and is not one.
     """
     try:
         actor = current_actor(request)
     except NotSignedIn:
         return to_picker(request)
 
+    from_date, to_date, range_label = _resolve_range(preset, start, end)
+    bounds = {"start": from_date, "end": to_date}
+
     with read_connection() as conn:
-        headline = _headline(conn)
+        headline = _headline(conn, from_date, to_date)
 
         with conn.cursor() as cur:
             cur.execute(
@@ -608,8 +678,11 @@ def dashboard(request: Request):
                        council_standard_days, decided_count, met_count, compliance_pct,
                        mean_net_days, median_net_days, p90_net_days
                 FROM v_sla_compliance
+                WHERE (%(start)s::date IS NULL OR decided_month >= date_trunc('month', %(start)s::date))
+                  AND (%(end)s::date   IS NULL OR decided_month <= date_trunc('month', %(end)s::date))
                 ORDER BY decided_month DESC, permit_type_code
-                """
+                """,
+                bounds,
             )
             compliance_rows = cur.fetchall()
 
@@ -621,9 +694,12 @@ def dashboard(request: Request):
                        round(100.0 * sum(met_count) / nullif(sum(decided_count), 0), 1)
                                                                                  AS compliance_pct
                 FROM v_sla_compliance
+                WHERE (%(start)s::date IS NULL OR decided_month >= date_trunc('month', %(start)s::date))
+                  AND (%(end)s::date   IS NULL OR decided_month <= date_trunc('month', %(end)s::date))
                 GROUP BY decided_month
                 ORDER BY decided_month
-                """
+                """,
+                bounds,
             )
             monthly = cur.fetchall()
 
@@ -652,9 +728,13 @@ def dashboard(request: Request):
             "headline": headline,
             "compliance_rows": compliance_rows,
             "monthly": monthly,
-            "max_month_count": max((m["decided"] for m in monthly), default=0),
             "disciplines": disciplines,
             "workload": workload,
             "escalations": escalations,
+            "presets": DASHBOARD_PRESETS,
+            "active_preset": preset if not (from_date and start) else "",
+            "range_label": range_label,
+            "range_start": start,
+            "range_end": end,
         },
     )

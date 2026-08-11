@@ -15,6 +15,26 @@
     here.
   </p>
 
+  <div class="filters">
+    <div class="presets">
+      {% for key, label, _months in presets %}
+      <a class="chip {{ 'on' if key == active_preset }}" href="/ui/dashboard?preset={{ key }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <form method="get" action="/ui/dashboard" class="range">
+      <label for="start">From</label>
+      <input type="date" id="start" name="start" value="{{ range_start }}">
+      <label for="end">to</label>
+      <input type="date" id="end" name="end" value="{{ range_end }}">
+      <button type="submit">Apply</button>
+    </form>
+  </div>
+  <p class="note">
+    Showing decided cases from {{ range_label }}. Workload, disciplines, and escalations
+    below are current state and are not filtered, because how many cases are open is a
+    question about now.
+  </p>
+
   <div class="tiles">
     <div class="tile">
       <div class="tile-label">Council standard met</div>
@@ -34,7 +54,7 @@
       <div class="tile-note">business days the clock was stopped</div>
     </div>
     <div class="tile">
-      <div class="tile-label">Open cases</div>
+      <div class="tile-label">Open cases <span class="scope">now</span></div>
       <div class="tile-value">{{ headline.volume.open_cases or 0 }}</div>
       <div class="tile-note">{{ headline.volume.paused_cases or 0 }} sitting with applicants</div>
     </div>
@@ -42,7 +62,7 @@
 </div>
 
 <div class="panel">
-  <h2>Cycle time</h2>
+  <h2>Cycle time <span class="scope">{{ range_label }}</span></h2>
   <p class="note">
     Gross is the whole elapsed time. Applicant wait is what the clock was stopped for. Net
     is what the department is answerable for, and gross minus wait equals net.
@@ -74,9 +94,9 @@
 </div>
 
 <div class="panel">
-  <h2>Compliance by month</h2>
+  <h2>Compliance by month <span class="scope">{{ range_label }}</span></h2>
   {% if not monthly %}
-    <p class="note">Nothing decided yet.</p>
+    <p class="note">No cases were decided in this range.</p>
   {% else %}
   <table class="grid">
     <thead>
@@ -103,7 +123,7 @@
 </div>
 
 <div class="panel">
-  <h2>Compliance by permit type</h2>
+  <h2>Compliance by permit type <span class="scope">{{ range_label }}</span></h2>
   <p class="note">
     Each permit type is measured against its own council standard, which is why a 30 day
     commercial review and a 20 day residential one can both be on target.
@@ -135,7 +155,7 @@
 </div>
 
 <div class="panel">
-  <h2>Where cases sit</h2>
+  <h2>Where cases sit <span class="scope">current state</span></h2>
   <p class="note">
     Open work and recent turnaround per discipline. A deep queue and a fast turnaround mean
     the work arrived. A deep queue and a slow turnaround mean the discipline is the reason
@@ -167,7 +187,7 @@
 </div>
 
 <div class="panel">
-  <h2>Reviewer workload</h2>
+  <h2>Reviewer workload <span class="scope">current state</span></h2>
   {% if not workload %}
     <p class="note">Nobody has open work or recent completions.</p>
   {% else %}
@@ -194,7 +214,7 @@
 </div>
 
 <div class="panel">
-  <h2>Open escalations</h2>
+  <h2>Open escalations <span class="scope">current state</span></h2>
   {% if not escalations %}
     <p class="note">Nothing escalated and unacknowledged.</p>
   {% else %}
