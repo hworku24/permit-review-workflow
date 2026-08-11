@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Configuration{% endblock %}
+
+{% block content %}
+<p class="crumb">
+  <a href="/ui/dashboard">Dashboard</a>
+  <span class="sep">|</span>
+  <a href="/ui/queue">My queue</a>
+</p>
+
+<div class="panel">
+  <h1>Configuration</h1>
+  <p class="summary">
+    Everything on this screen is a row in a reference table. Adding a discipline is not a
+    migration, a deploy, or a code change.
+  </p>
+</div>
+
+{% if saved %}
+<div class="panel">
+  <p class="banner ok">
+    {{ saved }} added. New applications will route to it from now on. Cases already under
+    review keep the disciplines they opened with, because routing is decided when intake is
+    accepted and changing it underneath an open case would rewrite a decision somebody
+    already made.
+  </p>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="panel">
+  <p class="banner failure">{{ error }}</p>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Review disciplines</h2>
+  <p class="note">
+    Standing means every application of that permit type opens a task. Candidate means the
+    triage step may propose it and a clerk confirms it. A discipline with nobody certified
+    still opens tasks, and those tasks sit unassigned, so the count is here to be looked at.
+  </p>
+
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Code</th><th>Name</th><th class="num">Standing on</th><th class="num">Candidate on</th>
+        <th class="num">Certified reviewers</th><th class="num">Open tasks</th><th>State</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in disciplines %}
+      <tr class="{{ 'inactive' if not row.active }}">
+        <td><code>{{ row.code }}</code></td>
+        <td>
+          {{ row.name }}
+          {% if row.description %}<br><span class="muted">{{ row.description }}</span>{% endif %}
+        </td>
+        <td class="num">{{ row.always_on }}</td>
+        <td class="num">{{ row.candidate_on }}</td>
+        <td class="num {{ 'sla-breached' if row.certified_reviewers == 0 and row.active }}">
+          {{ row.certified_reviewers }}
+        </td>
+        <td class="num">{{ row.open_tasks }}</td>
+        <td>
+          {# Not routed comes first. A discipline nothing routes to never opens a task, so
+             whether anybody is certified for it is not yet the interesting question. #}
+          {% if not row.active %}<span class="pill sla-unassigned">inactive</span>
+          {% elif row.always_on == 0 and row.candidate_on == 0 %}<span class="pill sla-at-risk">not routed</span>
+          {% elif row.certified_reviewers == 0 %}<span class="pill sla-at-risk">nobody certified</span>
+          {% else %}<span class="pill sla-on-track">in use</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Add a review discipline</h2>
+
+  {% if not may_edit %}
+    <p class="note">
+      Configuration is changed by a supervisor. You are signed in as <code>{{ actor.role }}</code>,
+      so this screen is read only for you.
+    </p>
+  {% else %}
+  <p class="note">
+    This writes to four tables in one transaction: the discipline itself, the permit types
+    it routes to, and the reviewers certified for it. A discipline that exists in one and
+    not the others routes work nobody can do, or is certified and never routed.
+  </p>
+
+  <form method="post" action="/ui/admin/disciplines" class="config">
+    <div class="field-row">
+      <div>
+        <label for="code">Code</label>
+        <input type="text" id="code" name="code" placeholder="ACCESSIBILITY" required
+               pattern="[A-Za-z][A-Za-z0-9_]{2,29}">
+        <div class="hint">Upper case, no spaces. Used in routing rules and URLs.</div>
+      </div>
+      <div class="grow">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" placeholder="Accessibility review" required>
+      </div>
+    </div>
+
+    <label for="description">Description</label>
+    <input type="text" id="description" name="description" size="70"
+           placeholder="What this reviewer checks">
+
+    <fieldset>
+      <legend>Route to permit types</legend>
+      <table class="grid compact">
+        <thead>
+          <tr><th>Permit type</th><th class="num">Council standard</th><th>Standing</th><th>Candidate</th></tr>
+        </thead>
+        <tbody>
+          {% for permit in permit_types %}
+          <tr>
+            <td>{{ permit.name }} <code>{{ permit.code }}</code></td>
+            <td class="num">{{ permit.council_standard_days }} days</td>
+            <td><input type="checkbox" name="always_required" value="{{ permit.code }}"></td>
+            <td><input type="checkbox" name="candidate" value="{{ permit.code }}"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="hint">
+        Ticking both leaves the permit type standing, since that is the stronger rule.
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Certify reviewers</legend>
+      <div class="checks">
+        {% for reviewer in reviewers %}
+        <label class="check">
+          <input type="checkbox" name="reviewers" value="{{ reviewer.id }}">
+          {{ reviewer.full_name }} <span class="muted">{{ reviewer.username }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <div class="hint">
+        Leave everyone unticked and the discipline still routes. Its tasks open unassigned
+        and stay that way.
+      </div>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit">Add discipline</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>What this does not do</h2>
+  <p class="note">
+    Adding a discipline does not touch cases already under review. Routing is decided when
+    intake is accepted, and reopening a discipline on a case whose reviewers have already
+    signed off would rewrite a decision that was made under the old rules.
+  </p>
+  <p class="note">
+    The SLA allowance is not asked for here. <code>sla_policy</code> falls back to the row
+    with no discipline set, so a new discipline inherits its permit type's review allowance
+    until somebody decides it needs its own.
+  </p>
+</div>
+{% endblock %}

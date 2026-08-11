@@ -11,9 +11,16 @@ from __future__ import annotations
 
 import psycopg
 
+#: The disciplines `sql/003_seed.sql` creates. Anything else in the table was added through
+#: the configuration screen, by a demo or by a test, and a reset removes it. Without this a
+#: test run leaves its invented disciplines behind and the next configuration screen shows
+#: ACOUSTIC and ORPHAN next to the real four.
+SEEDED_DISCIPLINES = ("ZONING", "STRUCTURAL", "FIRE", "ENVIRONMENTAL")
+
 #: Truncated on reset, child tables first so `RESTART IDENTITY CASCADE` has nothing to
 #: complain about. Reference data (permit types, disciplines, staff, holidays, SLA
-#: policies, document types) is loaded once by docker-entrypoint and left alone.
+#: policies, document types) is loaded once by docker-entrypoint and left alone, apart from
+#: the restores at the bottom of `reset_case_data`.
 CASE_TABLES = [
     "audit_log",
     "integration_call",
@@ -55,6 +62,24 @@ def reset_case_data(conn: psycopg.Connection) -> None:
         # Reference data is not truncated, but a test or a demo is allowed to mutate it.
         # Restoring it here is what makes a reset reproduce one known state every time.
         cur.execute("UPDATE reviewer SET active = (username <> 'tbrandt')")
+
+        # Disciplines added through the configuration screen, with the routing and
+        # certification rows that hang off them. Deleted in dependency order, because the
+        # foreign keys are there precisely so a discipline cannot be removed while
+        # something still points at it.
+        cur.execute(
+            "DELETE FROM reviewer_discipline WHERE discipline_code <> ALL(%s)",
+            (list(SEEDED_DISCIPLINES),),
+        )
+        cur.execute(
+            "DELETE FROM permit_type_discipline WHERE discipline_code <> ALL(%s)",
+            (list(SEEDED_DISCIPLINES),),
+        )
+        cur.execute(
+            "DELETE FROM sla_policy WHERE discipline_code IS NOT NULL AND discipline_code <> ALL(%s)",
+            (list(SEEDED_DISCIPLINES),),
+        )
+        cur.execute("DELETE FROM discipline WHERE code <> ALL(%s)", (list(SEEDED_DISCIPLINES),))
 
 
 def case_row_count(conn: psycopg.Connection) -> int:

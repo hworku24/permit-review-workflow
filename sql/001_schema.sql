@@ -367,8 +367,12 @@ CREATE INDEX ai_recommendation_application_idx ON ai_recommendation(application_
 
 CREATE TABLE audit_log (
     id                  bigserial PRIMARY KEY,
+    -- 'configuration' has no entity_id. A change to a reference table alters how every
+    -- future case routes, which is exactly the kind of thing an appeal two years later
+    -- needs to be able to reconstruct, so it is audited alongside case activity.
     entity_type         text NOT NULL CHECK (entity_type IN (
-                            'application', 'review_task', 'document', 'integration', 'ai', 'escalation')),
+                            'application', 'review_task', 'document', 'integration', 'ai',
+                            'escalation', 'configuration')),
     entity_id           uuid,
     action              text NOT NULL,
     actor               text NOT NULL,

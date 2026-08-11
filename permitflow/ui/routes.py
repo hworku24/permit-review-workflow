@@ -7,14 +7,17 @@ piece of SQL and cannot drift.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from .. import audit
 from ..ai import rag, recording
 from ..ai.retrieval import load_index
 from ..config import get_settings
@@ -738,3 +741,185 @@ def dashboard(
             "range_end": end,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Administration
+# ---------------------------------------------------------------------------
+
+#: Codes are used in URLs, SQL filters, and the routing tables, so they are constrained to
+#: something that cannot surprise any of those.
+DISCIPLINE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{2,29}$")
+
+
+def require_supervisor(actor) -> None:
+    if actor.role != Role.SUPERVISOR:
+        raise HTTPException(
+            status_code=403, detail=f"role {actor.role} may not change configuration"
+        )
+
+
+def _discipline_rows(conn) -> list[dict]:
+    """Every discipline with what it is wired into, so the page shows readiness.
+
+    A discipline that exists but is routed to nothing, or has nobody certified, is
+    configured and useless. The counts are here so that state is visible on the row
+    instead of being discovered when a case sits unassigned.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT d.code, d.name, d.description, d.active,
+                   (SELECT count(*) FROM permit_type_discipline p
+                     WHERE p.discipline_code = d.code AND p.always_required)  AS always_on,
+                   (SELECT count(*) FROM permit_type_discipline p
+                     WHERE p.discipline_code = d.code AND NOT p.always_required) AS candidate_on,
+                   (SELECT count(*) FROM reviewer_discipline rd
+                     JOIN reviewer r ON r.id = rd.reviewer_id
+                     WHERE rd.discipline_code = d.code AND r.active)          AS certified_reviewers,
+                   (SELECT count(*) FROM review_task t
+                     WHERE t.discipline_code = d.code
+                       AND t.status IN ('PENDING','ASSIGNED','IN_PROGRESS'))  AS open_tasks
+            FROM discipline d
+            ORDER BY d.active DESC, d.code
+            """
+        )
+        return cur.fetchall()
+
+
+def _permit_types(conn) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT code, name, council_standard_days FROM permit_type ORDER BY category, code"
+        )
+        return cur.fetchall()
+
+
+def _reviewers(conn) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, username, full_name FROM reviewer WHERE active AND role = 'reviewer'"
+            " ORDER BY full_name"
+        )
+        return cur.fetchall()
+
+
+@router.get("/admin", response_class=HTMLResponse)
+def admin(request: Request, saved: str = "", error: str = ""):
+    """Configuration a department can change without a developer.
+
+    Everything on this screen is a row in a reference table. Nothing here is a migration,
+    a deploy, or a code change, which is the answer to what happens when the consultant
+    leaves.
+    """
+    try:
+        actor = current_actor(request)
+    except NotSignedIn:
+        return to_picker(request)
+
+    with read_connection() as conn:
+        context = {
+            "actor": actor,
+            "may_edit": actor.role == Role.SUPERVISOR,
+            "disciplines": _discipline_rows(conn),
+            "permit_types": _permit_types(conn),
+            "reviewers": _reviewers(conn),
+            "saved": saved,
+            "error": error,
+        }
+
+    return TEMPLATES.TemplateResponse(request=request, name="admin.html", context=context)
+
+
+@router.post("/admin/disciplines")
+def add_discipline(
+    request: Request,
+    code: str = Form(...),
+    name: str = Form(...),
+    description: str = Form(""),
+    always_required: list[str] = Form(default=[]),
+    candidate: list[str] = Form(default=[]),
+    reviewers: list[str] = Form(default=[]),
+):
+    """Add a review discipline and wire it into routing and certification.
+
+    Four tables, and the screen does all four in one transaction, because a discipline
+    that exists in one of them and not the others is worse than one that does not exist:
+    it routes work nobody is certified to do, or it is certified and never routed.
+
+    The SLA allowance is deliberately not one of them. `sla_policy` falls back to the row
+    with a null discipline, so a new discipline inherits its permit type's review
+    allowance until somebody decides it needs its own.
+    """
+    try:
+        actor = current_actor(request)
+    except NotSignedIn:
+        return to_picker(request)
+    require_supervisor(actor)
+
+    code = code.strip().upper()
+    name = name.strip()
+
+    if not DISCIPLINE_CODE.match(code):
+        return RedirectResponse(
+            url="/ui/admin?error=" + quote(
+                f"{code or 'the code'} is not a usable code. Three to thirty characters, "
+                "starting with a letter, upper case letters, digits, and underscores."
+            ),
+            status_code=303,
+        )
+    if not name:
+        return RedirectResponse(url="/ui/admin?error=" + quote("A name is required."), status_code=303)
+
+    # A permit type cannot be both standing and candidate. Standing wins, since it is the
+    # stronger statement and silently dropping one of the two would be worse.
+    candidate = [c for c in candidate if c not in always_required]
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM discipline WHERE code = %s", (code,))
+            if cur.fetchone():
+                return RedirectResponse(
+                    url="/ui/admin?error=" + quote(f"{code} already exists."), status_code=303
+                )
+
+            cur.execute(
+                "INSERT INTO discipline (code, name, description) VALUES (%s, %s, %s)",
+                (code, name, description.strip() or None),
+            )
+
+            for permit_type in always_required:
+                cur.execute(
+                    """INSERT INTO permit_type_discipline (permit_type_code, discipline_code, always_required)
+                       VALUES (%s, %s, true)""",
+                    (permit_type, code),
+                )
+            for permit_type in candidate:
+                cur.execute(
+                    """INSERT INTO permit_type_discipline (permit_type_code, discipline_code, always_required)
+                       VALUES (%s, %s, false)""",
+                    (permit_type, code),
+                )
+            for reviewer_id in reviewers:
+                cur.execute(
+                    """INSERT INTO reviewer_discipline (reviewer_id, discipline_code, certified_on)
+                       VALUES (%s, %s, current_date)""",
+                    (reviewer_id, code),
+                )
+
+        audit.record(
+            conn,
+            entity_type="configuration",
+            entity_id=None,
+            action="add:discipline",
+            actor=actor.username,
+            after={
+                "code": code,
+                "name": name,
+                "always_required": sorted(always_required),
+                "candidate": sorted(candidate),
+                "certified_reviewers": len(reviewers),
+            },
+        )
+
+    return RedirectResponse(url="/ui/admin?saved=" + quote(code), status_code=303)

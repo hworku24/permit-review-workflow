@@ -49,10 +49,11 @@ licensing replica. The schema, views, and reference data load automatically.
 
 Then open `http://localhost:8000/ui/` for the staff screens, or `/docs` for the API.
 
-Four screens so far: a reviewer's queue sorted by what is most at risk, a case record
-holding the parts of a case that live in eleven tables, the intake triage screen with what
-the model drafted next to what it held back, and an ordinance question screen that answers
-in the ordinance's own words or declines.
+Six screens: a reviewer's queue sorted by what is most at risk, a case record holding the
+parts of a case that live in eleven tables, the intake triage screen with what the model
+drafted next to what it held back, an ordinance question screen that answers in the
+ordinance's own words or declines, a supervisor dashboard over the reporting views, and a
+configuration screen where a supervisor adds a review discipline without a deploy.
 
 Start the mock county SOAP service and the API:
 
