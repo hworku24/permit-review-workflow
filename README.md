@@ -164,17 +164,17 @@ flowchart TB
 
     subgraph app["FastAPI application, one process"]
         direction TB
-        ui["Staff screens<br/>queue, case, triage,<br/>ordinance, dashboard, admin"]
-        api["JSON API<br/>applications, tasks, queues,<br/>reports, ai"]
-        engine["Process engine<br/>state machine, guards, SLA clock,<br/>assignment, routing, escalation"]
-        ai["AI layer<br/>BM25 retrieval, grounded answers,<br/>intake triage, provider seam"]
-        integ["Integration layer<br/>retry, circuit breaker,<br/>attempt log"]
+        ui["Staff screens"]
+        api["JSON API"]
+        engine["Process engine"]
+        ai["AI layer"]
+        integ["Integration layer"]
     end
 
-    db[("PostgreSQL<br/>24 tables, 8 views,<br/>append-only audit")]
-    corpus[/"Zoning ordinance<br/>35 sections, on disk"/]
-    county["County property records<br/>SOAP 1.1 over HTTP"]
-    state["State licensing replica<br/>direct read-only connection"]
+    db[("PostgreSQL")]
+    corpus[/"Zoning ordinance"/]
+    county["County property records, SOAP"]
+    licensing["State licensing replica"]
 
     clerk --> ui
     reviewer --> ui
@@ -186,16 +186,16 @@ flowchart TB
     engine --> db
     engine --> integ
     ai --> corpus
-    ai -. "recommendations only,<br/>never a status change" .-> db
+    ai -. "recommendations only" .-> db
     integ --> county
-    integ --> state
-    ui -. "reads reporting views directly" .-> db
+    integ --> licensing
+    ui -. "reporting views" .-> db
 
     classDef person fill:#f2f4f6,stroke:#5c6470,color:#1a1d21
     classDef external fill:#fdf3e3,stroke:#8a5200,color:#8a5200
     classDef store fill:#e7edf4,stroke:#1f4e79,color:#1f4e79
     class clerk,reviewer,supervisor person
-    class county,state external
+    class county,licensing external
     class db,corpus store
 ```
 
@@ -224,33 +224,33 @@ flowchart TB
 
     subgraph aws["AWS, us-east-1"]
         direction TB
-        cf["CloudFront<br/>TLS, its own certificate"]
+        cf["CloudFront, TLS"]
 
         subgraph vpc["Default VPC"]
             direction TB
-            alb["Application load balancer<br/>HTTP :80"]
+            alb["Application load balancer"]
 
-            subgraph task["Fargate task, 0.25 vCPU"]
+            subgraph task["Fargate task"]
                 direction LR
-                capi["api<br/>:8000"]
-                csoap["soap-mock<br/>:8081"]
+                capi["api :8000"]
+                csoap["soap-mock :8081"]
             end
 
-            rds[("RDS PostgreSQL<br/>db.t4g.micro, not publicly accessible")]
+            rds[("RDS PostgreSQL, private")]
         end
 
         ecr["ECR"]
-        sm["Secrets Manager<br/>db url, passphrase,<br/>session secret"]
+        sm["Secrets Manager"]
         logs["CloudWatch Logs"]
     end
 
     browser -- "HTTPS" --> cf
     cf -- "HTTP, origin ranges only" --> alb
-    alb -- ":8000, from the ALB group only" --> capi
-    capi -- ":5432, from the task group only" --> rds
+    alb -- "8000, ALB group only" --> capi
+    capi -- "5432, task group only" --> rds
     capi -- "SOAP" --> csoap
-    ecr -. "image pulled at start" .-> task
-    sm -. "injected at start" .-> task
+    ecr -. "image at start" .-> task
+    sm -. "secrets at start" .-> task
     task -. "stdout" .-> logs
 
     classDef edge fill:#eaf5ee,stroke:#1f5c34,color:#1f5c34
